@@ -5,7 +5,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#0b0d12">
-  <meta name="description" content="GSLens.AI — Câmera web com Filtros Inteligentes, Realidade Aumentada, Recorte Avançado, Fundo Branco e Geração de PDF.">
+  <meta name="description" content="GSLens.AI — Câmera web com Filtros Inteligentes, Efeitos ao vivo, Scanner 3D por Realidade Aumentada (exporta FBX, GLB, glTF, OBJ e STL), Recorte Avançado, Fundo Branco e Geração de PDF.">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="assets/icons/icon-192.png">
   <title>GSLens.AI</title>
 
   <!-- Tipografia: usa a pilha de fontes do sistema (sem CDN de fontes).
@@ -16,16 +19,12 @@
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
   <link rel="stylesheet" href="css/vendor/bootstrap4.local.css">
 
-  <!-- jsPDF e Chart.js: bibliotecas FUNCIONAIS (não fazem parte do Bootstrap)
-       usadas respectivamente pela função "Gerar PDF" e pela tela de
-       Estatísticas. Este ambiente de build não tem acesso à internet para
-       baixar e vendorizar os arquivos reais dessas duas bibliotecas — por
-       isso, e só para estas duas, o CDN foi mantido para não quebrar as
-       funcionalidades que dependem delas. Se quiser 100% offline, baixe
-       jspdf.umd.min.js e chart.umd.min.js dos respectivos projetos e troque
-       os src abaixo para os caminhos locais (ex.: js/vendor/jspdf.umd.min.js). -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
+       PDF em lote e pela prancha imprimível do Scanner 3D.
+       Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
+       a tela mostra os mesmos dados em lista em vez de quebrar. -->
+  <script src="js/vendor/jspdf/jspdf.umd.min.js" defer></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
   <link rel="stylesheet" href="css/style.css">
@@ -61,11 +60,13 @@
       <h1 class="home-title mb-2">GS<span class="accent">Lens</span>.AI</h1>
       <p class="home-sub mb-4">Câmera profissional com IA, AR, filtros avançados e muito mais.</p>
 
-      <button class="btn btn-accent btn-lg px-5 mb-4" onclick="initCamera()">Abrir Câmera</button>
+      <button class="btn btn-accent btn-lg px-5 mb-3" onclick="initCamera()">Abrir Câmera</button>
+      <p class="home-error hidden" id="homeError" role="alert"></p>
 
       <div class="d-flex flex-wrap justify-content-center home-pills mb-3">
         <span class="badge badge-pill feature-pill">🎨 Filtros Inteligentes</span>
-        <span class="badge badge-pill feature-pill">🔮 Realidade Aumentada</span>
+        <span class="badge badge-pill feature-pill">🔮 Scanner 3D (AR)</span>
+        <span class="badge badge-pill feature-pill">✨ Efeitos ao Vivo</span>
         <span class="badge badge-pill feature-pill">✂️ Recorte Avançado</span>
         <span class="badge badge-pill feature-pill">⬜ Fundo Branco</span>
         <span class="badge badge-pill feature-pill">📄 Gerar PDF</span>
@@ -135,7 +136,8 @@
     <!-- VISOR -->
     <div class="viewfinder" id="viewfinder">
       <video id="video" autoplay playsinline muted></video>
-      <canvas id="arCanvas"></canvas>
+      <canvas id="fxCanvas" aria-hidden="true"></canvas>
+      <canvas id="scanCanvas" aria-hidden="true"></canvas>
 
       <div class="vc tl"></div>
       <div class="vc tr"></div>
@@ -156,7 +158,8 @@
       </div>
 
       <div class="mode-badge" id="modeBadge">FOTO</div>
-      <div class="ar-badge hidden" id="arBadge"><span class="ar-pulse"></span>AR</div>
+      <div class="ar-badge hidden" id="arBadge"><span class="ar-pulse"></span>AR · 3D</div>
+      <div class="ar-badge fx-badge hidden" id="fxBadge"><span class="ar-pulse"></span>EFEITOS</div>
       <div class="af-badge hidden" id="afBadge">AF ●</div>
       <div class="rec-badge hidden" id="recBadge"><span class="rec-dot"></span>REC</div>
 
@@ -165,6 +168,19 @@
 
       <div id="flashOverlay"></div>
       <div class="pinch-hint hidden" id="pinchHint">👌 Pinça para zoom</div>
+
+      <!-- Processamento do Scanner 3D -->
+      <div class="scan-proc hidden" id="scanProc" role="dialog" aria-modal="true" aria-labelledby="scanProcTitle">
+        <div class="scan-proc-card">
+          <div class="scan-spinner" aria-hidden="true"></div>
+          <div class="scan-proc-title" id="scanProcTitle">Gerando modelo 3D</div>
+          <div class="scan-proc-msg" id="scanProcMsg" role="status" aria-live="polite">Preparando…</div>
+          <div class="scan-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="scan-progress-bar" id="scanProcBar"></div></div>
+          <div class="scan-proc-pct" id="scanProcPct">0%</div>
+          <button class="btn btn-sm btn-outline-light" id="scanProcCancel" onclick="Scan3D.cancelBuild()">✕ Cancelar processamento</button>
+          <button class="btn btn-sm btn-accent hidden" id="scanProcClose" onclick="Scan3D.closeProc()">Entendi</button>
+        </div>
+      </div>
     </div>
 
     <!-- Área de controles rolável -->
@@ -189,19 +205,48 @@
         <span class="zl">5×</span>
       </div>
 
-      <!-- PAINEL AR -->
-      <div class="ar-panel hidden px-2" id="arPanel">
-        <div class="section-label">Realidade Aumentada</div>
-        <div class="d-flex overflow-auto scroll-row ar-scroll">
-          <button class="btn ar-opt active" data-ar="grid" onclick="setAR('grid',this)">📐 Grade</button>
-          <button class="btn ar-opt" data-ar="particles" onclick="setAR('particles',this)">✨ Partículas</button>
-          <button class="btn ar-opt" data-ar="neon" onclick="setAR('neon',this)">💡 Neon</button>
-          <button class="btn ar-opt" data-ar="bokeh" onclick="setAR('bokeh',this)">🫧 Bokeh</button>
-          <button class="btn ar-opt" data-ar="matrix" onclick="setAR('matrix',this)">🟩 Matrix</button>
-          <button class="btn ar-opt" data-ar="hearts" onclick="setAR('hearts',this)">❤️ Corações</button>
-          <button class="btn ar-opt" data-ar="stars" onclick="setAR('stars',this)">⭐ Estrelas</button>
-          <button class="btn ar-opt" data-ar="rain" onclick="setAR('rain',this)">🌧️ Chuva</button>
-          <button class="btn ar-opt" data-ar="confetti" onclick="setAR('confetti',this)">🎉 Confetti</button>
+      <!-- PAINEL EFEITOS (aba "Efeitos" — antes ficava dentro da aba AR) -->
+      <div class="fx-panel hidden px-2" id="fxPanel">
+        <div class="section-label">Efeitos ao vivo</div>
+        <div class="d-flex overflow-auto scroll-row fx-scroll" role="group" aria-label="Efeitos ao vivo">
+          <button class="btn fx-opt active" aria-pressed="true" onclick="setFx('grid',this)">📐 Grade</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('particles',this)">✨ Partículas</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('neon',this)">💡 Neon</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('bokeh',this)">🫧 Bokeh</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('matrix',this)">🟩 Matrix</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('hearts',this)">❤️ Corações</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('stars',this)">⭐ Estrelas</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('rain',this)">🌧️ Chuva</button>
+          <button class="btn fx-opt" aria-pressed="false" onclick="setFx('confetti',this)">🎉 Confetti</button>
+        </div>
+      </div>
+
+      <!-- PAINEL AR — Scanner 3D -->
+      <div class="scan-panel hidden px-2" id="scanPanel">
+        <div class="d-flex align-items-center">
+          <div class="section-label mb-0">Scanner 3D · Realidade Aumentada</div>
+          <span class="scan-count ml-auto" id="scanCount">0 vistas</span>
+        </div>
+        <div class="scan-status" id="scanStatus" role="status" aria-live="polite">Aponte a câmera para a prancha impressa.</div>
+        <div class="scan-progress" role="progressbar" aria-label="Cobertura do escaneamento" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="scan-progress-bar" id="scanProgressBar"></div></div>
+        <div class="scan-actions">
+          <button class="btn scan-btn" id="scanStartBtn" onclick="Scan3D.start()">▶ Iniciar</button>
+          <button class="btn scan-btn" id="scanPauseBtn" onclick="Scan3D.pause()" disabled>⏸ Pausar</button>
+          <button class="btn scan-btn" id="scanCancelBtn" onclick="Scan3D.cancel()" disabled>✕ Cancelar</button>
+          <button class="btn scan-btn" id="scanRestartBtn" onclick="Scan3D.restart()" disabled>↺ Reiniciar</button>
+          <button class="btn scan-btn primary" id="scanBuildBtn" onclick="Scan3D.build()" disabled>🧊 Gerar 3D</button>
+        </div>
+        <div class="scan-links">
+          <button class="btn scan-link" onclick="Scan3D.downloadBoard()">🖨️ Prancha A4</button>
+          <button class="btn scan-link" onclick="Scan3D.showHelp()">❔ Como escanear</button>
+          <label class="scan-link scan-quality mb-0">Qualidade
+            <select id="scanQuality" class="form-control form-control-sm" aria-label="Qualidade da malha">
+              <option value="80">Rápida</option>
+              <option value="96" selected>Normal</option>
+              <option value="128">Alta</option>
+            </select>
+          </label>
+          <button class="btn scan-link hidden" id="scanViewLastBtn" onclick="Scan3D.openResult()">🧊 Ver último modelo</button>
         </div>
       </div>
 
@@ -226,13 +271,14 @@
       </div>
 
       <!-- MODOS -->
-      <div class="mode-row d-flex justify-content-center flex-wrap px-2">
-        <button class="btn mode-btn" id="modeNoite" onclick="setMode('noite')">Noite</button>
-        <button class="btn mode-btn" id="modeRetrato" onclick="setMode('retrato')">Retrato</button>
-        <button class="btn mode-btn active" id="modeFoto" onclick="setMode('foto')">Foto</button>
-        <button class="btn mode-btn" id="modeVideo" onclick="setMode('video')">Vídeo</button>
-        <button class="btn mode-btn" id="modeSlowMo" onclick="setMode('slowmo')">Slow-Mo</button>
-        <button class="btn mode-btn" id="modeAR" onclick="setMode('ar')">AR</button>
+      <div class="mode-row d-flex px-2" role="tablist" aria-label="Modos da câmera">
+        <button class="btn mode-btn" role="tab" data-mode="noite" id="modeNoite" onclick="setMode('noite')">Noite</button>
+        <button class="btn mode-btn" role="tab" data-mode="retrato" id="modeRetrato" onclick="setMode('retrato')">Retrato</button>
+        <button class="btn mode-btn active" role="tab" aria-selected="true" data-mode="foto" id="modeFoto" onclick="setMode('foto')">Foto</button>
+        <button class="btn mode-btn" role="tab" data-mode="video" id="modeVideo" onclick="setMode('video')">Vídeo</button>
+        <button class="btn mode-btn" role="tab" data-mode="slowmo" id="modeSlowMo" onclick="setMode('slowmo')">Slow-Mo</button>
+        <button class="btn mode-btn" role="tab" data-mode="ar" id="modeAR" onclick="setMode('ar')">AR</button>
+        <button class="btn mode-btn" role="tab" data-mode="efeitos" id="modeEfeitos" onclick="setMode('efeitos')">Efeitos</button>
       </div>
 
       <!-- CONTROLES INFERIORES -->
@@ -295,7 +341,7 @@
       </button>
       <h2 class="gal-title mb-0 ml-2">Galeria</h2>
       <div class="ml-auto d-flex align-items-center">
-        <span id="galCount" class="gal-count mr-2">0 fotos</span>
+        <span id="galCount" class="gal-count mr-2" aria-live="polite">0 fotos</span>
         <button class="btn gal-action-btn" id="selectModeBtn" onclick="toggleSelectMode()">Selecionar</button>
       </div>
     </div>
@@ -306,13 +352,13 @@
       <button class="btn album-chip" onclick="filterAlbum('foto',this)">📷 Foto</button>
       <button class="btn album-chip" onclick="filterAlbum('video',this)">🎬 Vídeo</button>
       <button class="btn album-chip" onclick="filterAlbum('noite',this)">🌙 Noite</button>
-      <button class="btn album-chip" onclick="filterAlbum('ar',this)">🔮 AR</button>
+      <button class="btn album-chip" onclick="filterAlbum('efeitos',this)">✨ Efeitos</button>
       <button class="btn album-chip" onclick="filterAlbum('retrato',this)">🤳 Retrato</button>
     </div>
 
     <!-- Seleção em lote -->
     <div class="batch-bar hidden" id="batchBar">
-      <span id="selectedCount">0 selecionadas</span>
+      <span id="selectedCount">0 selecionados</span>
       <div class="batch-actions">
         <button class="btn btn-sm btn-accent" onclick="batchPDF()">📄 PDF</button>
         <button class="btn btn-sm btn-outline-danger" onclick="batchDelete()">🗑️ Excluir</button>
@@ -365,15 +411,15 @@
       </div>
 
       <!-- Abas -->
-      <div class="edit-tabs d-flex overflow-auto scroll-row">
-        <button class="btn etab active" onclick="openTab('adjust',this)">Ajustes</button>
-        <button class="btn etab" onclick="openTab('effects',this)">Efeitos</button>
-        <button class="btn etab" onclick="openTab('crop',this)">Recortar</button>
-        <button class="btn etab" onclick="openTab('draw',this)">Desenho</button>
-        <button class="btn etab" onclick="openTab('text',this)">Texto</button>
-        <button class="btn etab" onclick="openTab('frame',this)">Moldura</button>
-        <button class="btn etab" onclick="openTab('ai',this)">🤖 IA</button>
-        <button class="btn etab" onclick="openTab('export',this)">Exportar</button>
+      <div class="edit-tabs d-flex overflow-auto scroll-row" role="tablist" aria-label="Ferramentas de edição">
+        <button class="btn etab active" role="tab" data-tab="adjust" onclick="openTab('adjust',this)">Ajustes</button>
+        <button class="btn etab" role="tab" data-tab="effects" onclick="openTab('effects',this)">Efeitos</button>
+        <button class="btn etab" role="tab" data-tab="crop" onclick="openTab('crop',this)">Recortar</button>
+        <button class="btn etab" role="tab" data-tab="draw" onclick="openTab('draw',this)">Desenho</button>
+        <button class="btn etab" role="tab" data-tab="text" onclick="openTab('text',this)">Texto</button>
+        <button class="btn etab" role="tab" data-tab="frame" onclick="openTab('frame',this)">Moldura</button>
+        <button class="btn etab" role="tab" data-tab="ai" onclick="openTab('ai',this)">🤖 Auto</button>
+        <button class="btn etab" role="tab" data-tab="export" onclick="openTab('export',this)">Exportar</button>
       </div>
 
       <!-- AJUSTES -->
@@ -409,11 +455,11 @@
       <div class="epanel hidden" id="panelCrop">
         <p class="crop-help">Arraste na imagem acima para selecionar a área.</p>
         <div class="ratio-row d-flex flex-wrap">
-          <button class="btn btn-sm ratio-btn" onclick="setCropRatio(0,0)">Livre</button>
-          <button class="btn btn-sm ratio-btn" onclick="setCropRatio(1,1)">1:1</button>
-          <button class="btn btn-sm ratio-btn" onclick="setCropRatio(4,3)">4:3</button>
-          <button class="btn btn-sm ratio-btn" onclick="setCropRatio(16,9)">16:9</button>
-          <button class="btn btn-sm ratio-btn" onclick="setCropRatio(3,4)">3:4</button>
+          <button class="btn btn-sm ratio-btn active" data-ratio="0:0" onclick="setCropRatio(0,0)">Livre</button>
+          <button class="btn btn-sm ratio-btn" data-ratio="1:1" onclick="setCropRatio(1,1)">1:1</button>
+          <button class="btn btn-sm ratio-btn" data-ratio="4:3" onclick="setCropRatio(4,3)">4:3</button>
+          <button class="btn btn-sm ratio-btn" data-ratio="16:9" onclick="setCropRatio(16,9)">16:9</button>
+          <button class="btn btn-sm ratio-btn" data-ratio="3:4" onclick="setCropRatio(3,4)">3:4</button>
         </div>
         <div class="crop-actions d-flex mt-2">
           <button class="btn btn-sm btn-accent btn-crop-apply mr-2" onclick="applyCrop()">✓ Aplicar</button>
@@ -491,17 +537,17 @@
           <div class="ai-header d-flex align-items-center mb-3">
             <div class="ai-icon mr-2">🤖</div>
             <div>
-              <div class="ai-title">Melhoria com IA</div>
-              <div class="ai-sub">Análise automática e ajustes inteligentes</div>
+              <div class="ai-title">Ajustes automáticos</div>
+              <div class="ai-sub">A foto é analisada no próprio dispositivo (histograma, cores e bordas)</div>
             </div>
           </div>
           <div class="ai-actions">
             <button class="btn ai-btn" onclick="aiAutoEnhance()">✨ Auto Melhorar</button>
             <button class="btn ai-btn" onclick="aiAutoCrop()">✂️ Enquadrar Melhor</button>
             <button class="btn ai-btn" onclick="aiColorBalance()">🎨 Balancear Cores</button>
-            <button class="btn ai-btn" onclick="aiRemoveBg()">⬜ Remover Fundo</button>
+            <button class="btn ai-btn" onclick="aiRemoveBg()">⬜ Clarear Fundo</button>
           </div>
-          <div class="ai-result hidden mt-3" id="aiResult">
+          <div class="ai-result hidden mt-3" id="aiResult" role="status" aria-live="polite">
             <p id="aiResultText" class="mb-0"></p>
           </div>
         </div>
@@ -517,7 +563,7 @@
             <span class="ec-icon">⬜</span><span class="ec-label">PDF + Fundo Branco</span><span class="ec-sub">Aplica antes</span>
           </button>
           <button class="btn export-card" onclick="downloadJPG()">
-            <span class="ec-icon">🖼️</span><span class="ec-label">Baixar JPG</span><span class="ec-sub">Alta qualidade</span>
+            <span class="ec-icon">🖼️</span><span class="ec-label" id="jpgLabel">Baixar JPG</span><span class="ec-sub">Alta qualidade</span>
           </button>
           <button class="btn export-card" onclick="sharePhoto()">
             <span class="ec-icon">📤</span><span class="ec-label">Compartilhar</span><span class="ec-sub">Web Share API</span>
@@ -553,6 +599,74 @@
     </div>
   </div>
 
+  <!-- ═══════════════════════════════════════
+       MODELO 3D (resultado do scanner + exportação)
+  ═══════════════════════════════════════ -->
+  <div id="scanScreen" class="app-screen screen-hidden">
+    <div class="gal-header d-flex align-items-center px-2 px-sm-3 py-2">
+      <button class="btn back-btn" onclick="Scan3D.closeResult()" aria-label="Voltar para a câmera">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+      </button>
+      <h2 class="gal-title mb-0 ml-2">Modelo 3D</h2>
+      <button class="btn gal-action-btn ml-auto" onclick="Scan3D.scanAgain()">↺ Escanear novamente</button>
+    </div>
+    <div class="scan-result">
+      <section class="scan-viewer-wrap" aria-label="Visualização do modelo">
+        <div class="scan-viewer" id="scanViewer"></div>
+        <div class="viewer-msg hidden" id="viewerMsg" role="status"></div>
+        <div class="viewer-toolbar" role="toolbar" aria-label="Controles do visualizador">
+          <button class="btn viewer-tool" onclick="Scan3D.viewerTool('reset',this)" title="Centralizar">⟲ Vista</button>
+          <button class="btn viewer-tool" onclick="Scan3D.viewerTool('zoomIn',this)" title="Aproximar" aria-label="Aproximar">＋</button>
+          <button class="btn viewer-tool" onclick="Scan3D.viewerTool('zoomOut',this)" title="Afastar" aria-label="Afastar">－</button>
+          <button class="btn viewer-tool" data-toggle="rotate" onclick="Scan3D.viewerTool('rotate',this)">↻ Girar</button>
+          <button class="btn viewer-tool" data-toggle="wire" onclick="Scan3D.viewerTool('wire',this)">▦ Malha</button>
+          <button class="btn viewer-tool active" data-toggle="texture" onclick="Scan3D.viewerTool('texture',this)">🎨 Textura</button>
+        </div>
+        <p class="viewer-hint">Arraste para girar · role/pinça para aproximar · botão direito ou dois dedos para mover</p>
+      </section>
+      <aside class="scan-side">
+        <div class="scan-card">
+          <h3 class="scan-card-title">Informações</h3>
+          <div id="scanStats"></div>
+          <ul class="scan-warnings hidden" id="scanWarnings"></ul>
+        </div>
+        <div class="scan-card">
+          <h3 class="scan-card-title">Exportar</h3>
+          <div class="export-formats" role="radiogroup" aria-label="Formato de exportação">
+            <label class="fmt-opt"><input type="radio" name="exportFmt" value="glb" checked><span><strong>GLB</strong><small>Arquivo único · geometria + textura embutida · metros</small></span></label>
+            <label class="fmt-opt"><input type="radio" name="exportFmt" value="gltf"><span><strong>glTF</strong><small>ZIP: .gltf + .bin + .png · metros</small></span></label>
+            <label class="fmt-opt"><input type="radio" name="exportFmt" value="obj"><span><strong>OBJ</strong><small>ZIP: .obj + .mtl + .png · metros</small></span></label>
+            <label class="fmt-opt"><input type="radio" name="exportFmt" value="fbx"><span><strong>FBX</strong><small>Binário 7.4 · textura embutida · centímetros</small></span></label>
+            <label class="fmt-opt"><input type="radio" name="exportFmt" value="stl"><span><strong>STL</strong><small>Binário · só geometria (sem cor) · milímetros</small></span></label>
+          </div>
+          <button class="btn btn-accent btn-block mt-2" id="exportBtn" onclick="Scan3D.exportModel()">⬇️ Exportar modelo</button>
+          <p class="export-msg" id="exportMsg" role="status" aria-live="polite"></p>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Ajuda do scanner -->
+  <div id="scanHelpModal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="scanHelpTitle">
+    <div class="modal-backdrop-custom" onclick="Scan3D.hideHelp()"></div>
+    <div class="modal-sheet batch-sheet help-sheet">
+      <div class="modal-handle"></div>
+      <div class="p-3">
+        <h3 class="batch-title" id="scanHelpTitle">Como escanear um objeto em 3D</h3>
+        <ol class="help-list">
+          <li><strong>Imprima a prancha</strong> (botão "🖨️ Prancha A4") em tamanho real, sem "ajustar à página". Confira a barra de 50 mm.</li>
+          <li>Coloque a folha numa mesa e o <strong>objeto dentro do quadrado central</strong> (até ~11 × 11 × 11 cm). Objetos que contrastam com o papel branco funcionam melhor.</li>
+          <li>Use luz difusa e uniforme (evite sombras duras e reflexos).</li>
+          <li>Na aba <strong>AR</strong>, aponte para a folha: aparece um cubo 3D ancorado nela. Toque em <strong>Iniciar</strong>.</li>
+          <li>Dê a volta completa no objeto <strong>devagar</strong>, mantendo a folha inteira na tela, em três alturas: baixa (~25°), média (~45°) e de cima (~70°). As vistas são capturadas automaticamente e o anel verde mostra a cobertura.</li>
+          <li>Toque em <strong>Gerar 3D</strong>. O processamento é feito no próprio aparelho (nada é enviado à internet).</li>
+        </ol>
+        <p class="help-note">Método: rastreamento óptico dos marcadores (pose 6DoF da câmera) + reconstrução volumétrica por silhuetas + textura projetada das fotos. Limitações: concavidades profundas e topos planos podem ficar arredondados; objetos brancos/transparentes/espelhados não são separados do papel.</p>
+        <button class="btn btn-accent btn-block" onclick="Scan3D.hideHelp()">Entendi</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div id="toast"></div>
   <!-- Canvas de processamento -->
@@ -564,6 +678,20 @@
        são controlados por script.js puro, via classList. Eram ~90KB
        carregados à toa em cada visita. -->
 
+  <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
+  <script src="js/vendor/aruco/cv.js"></script>
+  <script src="js/vendor/aruco/aruco.js"></script>
+  <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
+  <script src="js/scan3d/math.js"></script>
+  <script src="js/scan3d/board.js"></script>
+  <script src="js/scan3d/tracker.js"></script>
+  <script src="js/scan3d/segment.js"></script>
+  <script src="js/scan3d/reconstruct.js"></script>
+  <script src="js/scan3d/texture.js"></script>
+  <script src="js/scan3d/pipeline.js"></script>
+  <script src="js/scan3d/exporters.js"></script>
+  <script src="js/scan3d/viewer.js"></script>
+  <script src="js/scan3d/app.js"></script>
   <script src="js/script.js"></script>
 </body>
 
