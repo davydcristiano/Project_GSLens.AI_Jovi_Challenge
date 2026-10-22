@@ -21,15 +21,16 @@ function init() {
 }
 
 self.onmessage = async (e) => {
-  const { id, png } = e.data || {};
+  const { id, png, tsv } = e.data || {};
   try {
     await init();
     T.FS.writeFile('/input', png);
     api.SetImageFile();
-    const text = api.GetUTF8Text() || '';
-    const conf = api.MeanTextConf();
+    /* TSV traz cada palavra com a posição — usado para marcar o link na tela */
+    const out = tsv ? { tsv: api.GetTSVText(0) || '' } : { text: api.GetUTF8Text() || '' };
+    out.conf = api.MeanTextConf();
     api.Clear();
-    self.postMessage({ id, text, conf });
+    self.postMessage(Object.assign({ id }, out));
   } catch (err) {
     ready = null;
     self.postMessage({ id, error: String(err && err.message || err) });

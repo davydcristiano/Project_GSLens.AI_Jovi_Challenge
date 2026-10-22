@@ -1126,6 +1126,12 @@ function capture() {
   ctx.drawImage(video, sx, sy, sw, sh, 0, 0, vw, vh);
   ctx.setTransform(1,0,0,1,0,0);
 
+  /* Modo Foto/Noite/Retrato: procura QR Code e link (https) na foto tirada */
+  if (window.LinkScan && LinkScan.enabled && ['foto','noite','retrato'].includes(currentMode)) {
+    const copy=document.createElement('canvas'); copy.width=vw; copy.height=vh;
+    copy.getContext('2d').drawImage(canvas,0,0);
+    setTimeout(()=>LinkScan.scanCapture(copy),50);
+  }
   if (currentMode==='noite') {
     const id=ctx.getImageData(0,0,vw,vh);
     for(let i=0;i<id.data.length;i+=4){id.data[i]=cl(id.data[i]*1.4+18);id.data[i+1]=cl(id.data[i+1]*1.3+12);id.data[i+2]=cl(id.data[i+2]*1.2+8);}

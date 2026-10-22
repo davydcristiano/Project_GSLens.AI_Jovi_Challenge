@@ -7,6 +7,7 @@
   <meta name="theme-color" content="#0b0d12">
   <meta name="description" content="GSLens.AI — Câmera web com Filtros Inteligentes, Efeitos ao vivo, Scanner 3D por Realidade Aumentada (exporta FBX, GLB, glTF, OBJ e STL), Recorte Avançado, Fundo Branco e Geração de PDF.">
   <link rel="manifest" href="manifest.webmanifest">
+  <meta name="gslens-version" content="20261021d">
   <link rel="icon" href="assets/icons/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="assets/icons/icon-192.png">
   <title>GSLens.AI</title>
@@ -17,17 +18,17 @@
        com boa aparência mesmo sem baixar fontes externas. -->
 
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
-  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css">
+  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261021d">
 
   <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
        PDF em lote e pela prancha imprimível do Scanner 3D.
        Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
        a tela mostra os mesmos dados em lista em vez de quebrar. -->
-  <script src="js/vendor/jspdf/jspdf.umd.min.js" defer></script>
+  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261021d" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
-  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/style.css?v=20261021d">
 </head>
 
 <body class="theme-dark">
@@ -148,6 +149,8 @@
       <canvas id="scanCanvas" aria-hidden="true"></canvas>
       <canvas id="linkCanvas" aria-hidden="true"></canvas>
       <div class="link-badge hidden" id="linkBadge" aria-hidden="true">🔗 QR · Links</div>
+      <div class="link-zoom hidden" id="linkZoom" aria-hidden="true"></div>
+      <button class="link-chip hidden" id="linkChip" onclick="event.stopPropagation();LinkScan.chipTap()" aria-label="Abrir link detectado"><span class="link-chip-ico">🧭</span><span id="linkChipText">site</span></button>
 
       <div class="vc tl"></div>
       <div class="vc tr"></div>
@@ -681,33 +684,36 @@
   <!-- ═══════════════════════════════════════
        MINI NAVEGADOR (QR Code / links detectados)
   ═══════════════════════════════════════ -->
-  <div id="webSheet" class="modal-overlay web-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="webHost">
-    <div class="modal-backdrop-custom" onclick="LinkScan.close()"></div>
-    <div class="modal-sheet web-sheet">
-      <div class="web-head">
-        <span class="web-lock" id="webLock" aria-hidden="true">🔒</span>
-        <div class="web-addr">
-          <div class="web-host-row"><strong id="webHost">site</strong><span class="web-source" id="webSource">QR Code</span></div>
-          <div class="web-url" id="webUrl"></div>
+  <div id="webSheet" class="web-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="webHost">
+    <div class="web-backdrop" onclick="LinkScan.close()"></div>
+    <div class="web-stack">
+      <div class="web-card" id="webCard">
+        <div class="web-card-head">
+          <span class="web-lock" id="webLock" aria-hidden="true">🔒</span>
+          <div class="web-addr">
+            <div class="web-host-row"><strong id="webHost">site</strong><span class="web-source" id="webSource">QR Code</span></div>
+            <div class="web-url" id="webUrl"></div>
+          </div>
+          <button class="btn web-hide" id="webHideBtn" onclick="LinkScan.togglePreview()">Ocultar pré-visualização</button>
         </div>
-        <button class="btn web-btn" onclick="LinkScan.close()" aria-label="Fechar">✕</button>
-      </div>
-      <div class="web-actions" id="webActions" role="toolbar" aria-label="Ações do link">
-        <button class="btn web-btn" onclick="LinkScan.reload()" title="Recarregar">↻ Recarregar</button>
-        <button class="btn web-btn" onclick="LinkScan.openExternal()" title="Abrir no navegador">↗ Abrir fora</button>
-        <button class="btn web-btn" onclick="LinkScan.copyUrl()" title="Copiar link">⧉ Copiar</button>
-        <button class="btn web-btn" onclick="LinkScan.share()" title="Compartilhar">📤 Compartilhar</button>
-      </div>
-      <div class="web-frame-wrap" id="webFrameWrap">
-        <div class="web-loading" id="webLoading"><div class="web-loading-bar"></div></div>
-        <iframe id="webFrame" class="web-frame" title="Página"></iframe>
-        <div class="web-timeout hidden" id="webTimeout" role="alert">
-          <p>A página está demorando ou não permite ser exibida dentro do app.</p>
-          <button class="btn btn-accent btn-sm" onclick="LinkScan.openExternal()">↗ Abrir no navegador</button>
+        <div class="web-frame-wrap" id="webFrameWrap">
+          <div class="web-loading" id="webLoading"><div class="web-loading-bar"></div></div>
+          <iframe id="webFrame" class="web-frame" title="Página"></iframe>
+          <div class="web-timeout hidden" id="webTimeout" role="alert">
+            <p>A página está demorando ou não permite ser exibida dentro do app.</p>
+            <button class="btn btn-accent btn-sm" onclick="LinkScan.openExternal()">↗ Abrir no navegador</button>
+          </div>
         </div>
+        <div class="web-info hidden" id="webInfo"></div>
+        <p class="web-note" id="webNote"></p>
       </div>
-      <div class="web-info hidden" id="webInfo"></div>
-      <p class="web-note" id="webNote"></p>
+      <div class="web-menu" id="webActions" role="menu" aria-label="Ações do link">
+        <button class="web-mi" role="menuitem" onclick="LinkScan.openExternal()"><span>Abrir no app / navegador</span><i>↗</i></button>
+        <button class="web-mi" role="menuitem" onclick="LinkScan.reload()"><span>Recarregar página</span><i>↻</i></button>
+        <button class="web-mi" role="menuitem" onclick="LinkScan.copyUrl()"><span>Copiar Link</span><i>⧉</i></button>
+        <button class="web-mi" role="menuitem" onclick="LinkScan.share()"><span>Compartilhar…</span><i>⇪</i></button>
+        <button class="web-mi danger" role="menuitem" onclick="LinkScan.close()"><span>Fechar</span><i>✕</i></button>
+      </div>
     </div>
   </div>
 
@@ -724,24 +730,24 @@
 
   <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
   <!-- Leitor de QR (jsQR, Apache-2.0) + filtros e molduras + leitor de links -->
-  <script src="js/vendor/jsqr/jsQR.js" defer></script>
-  <script src="js/filters.js"></script>
-  <script src="js/frames.js"></script>
-  <script src="js/links/linkscan.js"></script>
-  <script src="js/vendor/aruco/cv.js"></script>
-  <script src="js/vendor/aruco/aruco.js"></script>
+  <script src="js/vendor/jsqr/jsQR.js?v=20261021d" defer></script>
+  <script src="js/filters.js?v=20261021d"></script>
+  <script src="js/frames.js?v=20261021d"></script>
+  <script src="js/links/linkscan.js?v=20261021d"></script>
+  <script src="js/vendor/aruco/cv.js?v=20261021d"></script>
+  <script src="js/vendor/aruco/aruco.js?v=20261021d"></script>
   <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
-  <script src="js/scan3d/math.js"></script>
-  <script src="js/scan3d/board.js"></script>
-  <script src="js/scan3d/tracker.js"></script>
-  <script src="js/scan3d/segment.js"></script>
-  <script src="js/scan3d/reconstruct.js"></script>
-  <script src="js/scan3d/texture.js"></script>
-  <script src="js/scan3d/pipeline.js"></script>
-  <script src="js/scan3d/exporters.js"></script>
-  <script src="js/scan3d/viewer.js"></script>
-  <script src="js/scan3d/app.js"></script>
-  <script src="js/script.js"></script>
+  <script src="js/scan3d/math.js?v=20261021d"></script>
+  <script src="js/scan3d/board.js?v=20261021d"></script>
+  <script src="js/scan3d/tracker.js?v=20261021d"></script>
+  <script src="js/scan3d/segment.js?v=20261021d"></script>
+  <script src="js/scan3d/reconstruct.js?v=20261021d"></script>
+  <script src="js/scan3d/texture.js?v=20261021d"></script>
+  <script src="js/scan3d/pipeline.js?v=20261021d"></script>
+  <script src="js/scan3d/exporters.js?v=20261021d"></script>
+  <script src="js/scan3d/viewer.js?v=20261021d"></script>
+  <script src="js/scan3d/app.js?v=20261021d"></script>
+  <script src="js/script.js?v=20261021d"></script>
 </body>
 
 </html>

@@ -11,6 +11,8 @@
 (function (root) {
   'use strict';
   const $ = id => document.getElementById(id);
+  /* diagnóstico: abra o app com ?debug=links para ver as leituras no console */
+  const DEBUG = typeof location !== 'undefined' && /[?&]debug=links\b/.test(location.search);
 
   /* ───────── Interpretação de conteúdo ───────── */
   const TLDS = new Set(('com br org net gov edu io ai app dev co me info biz tv xyz site online store shop tech blog news ' +
@@ -49,18 +51,40 @@
     return u.href;
   }
 
+  /* Corrige confusões típicas do OCR no final do domínio:
+     "youtube.con" / ".corn" / ".c0m" / ".coml" (cursor colado) → ".com" etc. */
+  const TLD_FIX = [
+    [/\.(?:con|corn|c0m|cOm|coin|cam|comn|conn|corm|eom|oom|c〇m)(?=$|[\/?#.])/i, '.com'],
+    [/\.(com|net|org|br|gov|edu|io|app|dev)[il1|!I\]\)]+(?=$|[\/?#])/i, '.$1'],
+    [/\.com\.(?:bt|hr|bn|b1|8r)(?=$|[\/?#])/i, '.com.br'],
+    [/\.(?:0rg|orq|ong)(?=$|[\/?#])/i, '.org'],
+    [/\.(?:nel|nct)(?=$|[\/?#])/i, '.net']
+  ];
+  function fixOcrTld(c) {
+    let out = c;
+    for (const [re, rp] of TLD_FIX) out = out.replace(re, rp);
+    return out;
+  }
+
   /* Extrai links de um texto livre (OCR). Corrige erros comuns de leitura. */
   function extractLinks(text) {
     if (!text) return [];
     const out = [], seen = new Set();
     const t = text
       .replace(/\b(https?)\s*[:;]\s*\/\s*\/\s*/gi, '$1://')   /* "https : //" */
-      .replace(/\bw\s*w\s*w\s*[.,]\s*/gi, 'www.')               /* "w w w ," */
+      /* "www" lido errado ("were", "vww", "ww", "wvw") antes de "palavra com" */
+      .replace(/(^|[^a-z0-9])(?:were|(?=[a-z]*w)(?=[a-z]*[wv][a-z]*[wv])[wve]{2,5})\s*[.,:;]?\s+(?=[a-z0-9-]{3,}\s*[.,]?\s*(?:com|con|c0m|corn|net|org)(?:\s*[.,]?\s*br)?[|\])!.]*\s*(?:$|\n))/gim, '$1www.')
+      .replace(/\b(?:[wvm]\s*[wv]\s*[wv]|[wv]\s*[wvm]\s*[wv]|[wv]\s*[wv]\s*[wvm])\s*[.,:;]\s*(?=[a-z0-9])/gi, 'www.')
+      /* ponto perdido depois de "www.": "www.youtube con" → "www.youtube.con" */
+      .replace(/\b(www\.[a-z0-9-]{2,})\s*[,;:]?\s+(com|con|corn|c0m|cam|net|org|gov|edu|io|app|dev)\b/gi, '$1.$2')
+      .replace(/([a-z0-9])\s*-\s+([a-z0-9])/gi, '$1-$2')              /* "gslens- demo" */               /* "w w w ," */
       .replace(/([a-z0-9])\s*\.\s*(com|br|org|net|gov|edu|io|app|dev)\b/gi, '$1.$2');
     const re = /\b((?:https?:\/\/|www\.)[^\s<>"'`]+|[a-z0-9][a-z0-9-]{0,62}(?:\.[a-z0-9-]{1,63})*\.[a-z]{2,24}(?:\/[^\s<>"'`]*)?)/gi;
     let m;
     while ((m = re.exec(t))) {
-      const cand = m[1];
+      /* corta caracteres que não existem em URL (ex.: cursor "|" colado no ".com") */
+      let cand = m[1].replace(/[|¦\\{}^`\[\]].*$/, '');
+      cand = fixOcrTld(cand).replace(/^[a-z0-9]{1,3}(?=www\.)/i, '');   /* ruído colado antes do "www." */
       if (/@/.test(t.slice(Math.max(0, m.index - 1), m.index))) continue;   /* parte de e-mail */
       const url = normalizeUrl(cand.replace(/^w{1,4}\.(?=[a-z0-9-]+\.)/i, m0 => (/^w{3}\./i.test(m0) ? m0 : 'www.')), true);
       if (!url) continue;
@@ -115,21 +139,30 @@
   }
 
   /* Lê QR de um canvas. Retorna [{raw, corners:[[x,y]...] (pixels do canvas)}] */
-  async function readQR(canvas, ctx) {
-    const bd = await getBarcodeDetector();
-    if (bd) {
-      try {
-        const res = await bd.detect(canvas);
-        if (res.length) return res.map(r => ({ raw: r.rawValue, corners: (r.cornerPoints || []).map(p => [p.x, p.y]) }));
-        return [];
-      } catch (e) { /* cai para o jsQR */ }
-    }
+  /* Lê QR de um canvas. Retorna [{raw, corners}] (pixels do canvas).
+     CORREÇÃO: em alguns Androids o BarcodeDetector existe mas sempre
+     devolve vazio (serviço de detecção ausente). Antes isso desligava a
+     leitura em silêncio; agora o jsQR também é usado quando o nativo não
+     acha nada (useJs=true) e o nativo é desativado se der erro. */
+  let bdFails = 0;
+  function jsqrRead(canvas, ctx) {
     if (typeof root.jsQR !== 'function') return [];
     const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const r = root.jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
     if (!r || !r.data) return [];
-    const L = r.location;
-    return [{ raw: r.data, corners: [L.topLeftCorner, L.topRightCorner, L.bottomRightCorner, L.bottomLeftCorner].map(p => [p.x, p.y]) }];
+    const L0 = r.location;
+    return [{ raw: r.data, corners: [L0.topLeftCorner, L0.topRightCorner, L0.bottomRightCorner, L0.bottomLeftCorner].map(p => [p.x, p.y]), engine: 'jsQR' }];
+  }
+  async function readQR(canvas, ctx, useJs) {
+    const bd = await getBarcodeDetector();
+    if (bd) {
+      try {
+        const res = await bd.detect(canvas);
+        if (res.length) { bdFails = 0; return res.map(r => ({ raw: r.rawValue, corners: (r.cornerPoints || []).map(p => [p.x, p.y]), engine: 'nativo' })); }
+      } catch (e) { if (++bdFails > 3) { barcodeDetector = null; console.warn('BarcodeDetector desativado:', e); } }
+      if (useJs === false) return [];
+    }
+    return jsqrRead(canvas, ctx);
   }
 
   /* OCR: Worker quando possível; na abertura via file:// (Workers bloqueados)
@@ -140,7 +173,7 @@
     ensureWorker() {
       if (this.worker || !this.canWorker()) return this.worker;
       try {
-        this.worker = new Worker('js/links/ocr-worker.js');
+        this.worker = new Worker('js/links/ocr-worker.js?v=20261021d');
         this.worker.onmessage = e => { const p = this.pending.get(e.data.id); if (!p) return; this.pending.delete(e.data.id); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); };
         this.worker.onerror = e => { console.warn('OCR worker:', e.message); this.failed = true; this.pending.forEach(p => p.reject(new Error('OCR indisponível'))); this.pending.clear(); this.worker = null; };
       } catch (e) { this.failed = true; this.worker = null; }
@@ -160,15 +193,16 @@
       this.inline.catch(() => { this.inline = null; });
       return this.inline;
     },
-    async recognize(png) {
+    async recognize(png, tsv) {
       if (this.ensureWorker()) {
         const id = ++this.seq;
-        return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, png }, [png.buffer]); });
+        return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, png, tsv: !!tsv }, [png.buffer]); });
       }
       const { T, api } = await this.inlineEngine();
       T.FS.writeFile('/input', png); api.SetImageFile();
-      const text = api.GetUTF8Text() || '', conf = api.MeanTextConf(); api.Clear();
-      return { text, conf };
+      const out = tsv ? { tsv: api.GetTSVText(0) || '' } : { text: api.GetUTF8Text() || '' };
+      out.conf = api.MeanTextConf(); api.Clear();
+      return out;
     },
     busy() { return this.pending.size > 0; }
   };
@@ -193,9 +227,149 @@
     return new Uint8Array(await blob.arrayBuffer());
   }
 
+  /* ───────── Localizador de linhas de texto (estilo "Texto ao Vivo") ─────────
+     Texto pequeno (ex.: link num monitor a 1 m) some quando o quadro inteiro
+     é reduzido para o OCR. Aqui as linhas de texto são localizadas por
+     bordas verticais densas e alinhadas; só esses trechos são recortados
+     em resolução nativa, ampliados (~40 px de altura de letra) e lidos
+     juntos numa única passada do OCR. */
+  function findTextRegions(src, vw, vh, maxRegions) {
+    const sc = Math.min(1, (findTextRegions.maxW || 1440) / vw);
+    const w = Math.round(vw * sc), h = Math.round(vh * sc);
+    const c = findTextRegions.c || (findTextRegions.c = document.createElement('canvas'));
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(src, 0, 0, vw, vh, 0, 0, w, h);
+    const d = x.getImageData(0, 0, w, h).data;
+    const g = new Uint8Array(w * h);
+    for (let i = 0, j = 0; j < g.length; i += 4, j++) g[j] = (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+    /* bordas verticais (traços de letras) */
+    const e = new Uint8Array(w * h);
+    for (let y = 1; y < h - 1; y++) for (let xx = 1; xx < w - 1; xx++) {
+      const i = y * w + xx;
+      const gx = Math.abs(g[i + 1] - g[i - 1]);
+      const gy = Math.abs(g[i + w] - g[i - w]);
+      if (gx > 10 && gx >= gy * 0.6) e[i] = 1;
+    }
+    /* fecha os espaços entre letras na horizontal e entre partes na vertical */
+    const gap = Math.max(4, Math.round(6 * w / 960)), row = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++) {
+      let last = -1e9;
+      for (let xx = 0; xx < w; xx++) {
+        const i = y * w + xx;
+        if (e[i]) { if (xx - last <= gap) for (let k = last + 1; k < xx; k++) row[y * w + k] = 1; row[i] = 1; last = xx; }
+      }
+    }
+    for (let i = w; i < w * (h - 1); i++) if (!row[i] && row[i - w] && row[i + w]) row[i] = 1;
+    /* componentes conexos */
+    const lab = new Int32Array(w * h), stack = new Int32Array(w * h), boxes = [];
+    let L2 = 0;
+    for (let s0 = 0; s0 < w * h; s0++) {
+      if (!row[s0] || lab[s0]) continue;
+      L2++; let sp = 0; stack[sp++] = s0; lab[s0] = L2;
+      let x0 = w, y0 = h, x1 = 0, y1 = 0, n = 0, en = 0;
+      while (sp) {
+        const p = stack[--sp], px = p % w, py = (p / w) | 0; n++; en += e[p];
+        if (px < x0) x0 = px; if (px > x1) x1 = px; if (py < y0) y0 = py; if (py > y1) y1 = py;
+        if (px > 0 && row[p - 1] && !lab[p - 1]) { lab[p - 1] = L2; stack[sp++] = p - 1; }
+        if (px < w - 1 && row[p + 1] && !lab[p + 1]) { lab[p + 1] = L2; stack[sp++] = p + 1; }
+        if (py > 0 && row[p - w] && !lab[p - w]) { lab[p - w] = L2; stack[sp++] = p - w; }
+        if (py < h - 1 && row[p + w] && !lab[p + w]) { lab[p + w] = L2; stack[sp++] = p + w; }
+      }
+      const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+      if (bh < 4 || bh > 100 * w / 960 || bw < 2.2 * bh || bw > 0.95 * w) continue;
+      const fill = n / (bw * bh), dens = en / (bw * bh);
+      if (fill < 0.35 || dens < 0.06 || dens > 0.75) continue;
+      boxes.push({ x: x0 / sc, y: y0 / sc, w: bw / sc, h: bh / sc, score: bw * Math.min(1, dens * 4) });
+    }
+    boxes.sort((a, b) => b.score - a.score);
+    return boxes.slice(0, maxRegions || 10);
+  }
+
+  /* Recorta, amplia e empilha as regiões; lê com OCR (TSV) e devolve
+     links com a caixa na coordenada do quadro de vídeo. */
+  async function ocrRegions(src, vw, vh, regions) {
+    if (!regions.length) return { links: [], text: '' };
+    const segs = [];
+    const TARGET = 44, MAXW = 1600, GAP = 24;
+    let y = GAP, maxW = 0;
+    for (const r of regions) {
+      const pad = r.h * 0.6;
+      const fx = Math.max(0, r.x - pad), fy = Math.max(0, r.y - pad);
+      const fw = Math.min(vw - fx, r.w + 2 * pad), fh = Math.min(vh - fy, r.h + 2 * pad);
+      let scale = Math.max(1, Math.min(4, TARGET / Math.max(4, r.h)));
+      if (fw * scale > MAXW - 2 * GAP) scale = (MAXW - 2 * GAP) / fw;
+      const sw = Math.round(fw * scale), sh = Math.round(fh * scale);
+      segs.push({ fx, fy, fw, fh, scale, dx: GAP, dy: y, sw, sh });
+      y += sh + GAP; maxW = Math.max(maxW, sw + 2 * GAP);
+      if (y > 2200) break;
+    }
+    const c = document.createElement('canvas'); c.width = maxW; c.height = y;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+    x.imageSmoothingQuality = 'high';
+    for (const s0 of segs) {
+      x.drawImage(src, s0.fx, s0.fy, s0.fw, s0.fh, s0.dx, s0.dy, s0.sw, s0.sh);
+      /* contraste por recorte; texto claro em fundo escuro é invertido */
+      const id = x.getImageData(s0.dx, s0.dy, s0.sw, s0.sh), dd = id.data;
+      let mn = 255, mx = 0, sum = 0;
+      for (let i = 0; i < dd.length; i += 4) { const v = (dd[i] * 77 + dd[i + 1] * 150 + dd[i + 2] * 29) >> 8; dd[i] = v; sum += v; if (v < mn) mn = v; if (v > mx) mx = v; }
+      const mean = sum / (dd.length / 4), inv = mean < (mn + mx) / 2 - 10, k = 255 / Math.max(24, mx - mn);
+      for (let i = 0; i < dd.length; i += 4) { let v = (dd[i] - mn) * k; if (inv) v = 255 - v; v = Math.max(0, Math.min(255, v)); dd[i] = dd[i + 1] = dd[i + 2] = v; dd[i + 3] = 255; }
+      /* nitidez (unsharp) — o recorte ampliado de texto pequeno fica borrado */
+      if (s0.scale > 1.3) {
+        const W0 = s0.sw, src0 = new Uint8ClampedArray(W0 * s0.sh);
+        for (let i = 0, j = 0; j < src0.length; i += 4, j++) src0[j] = dd[i];
+        const rr = Math.max(1, Math.round(s0.scale * 0.8));
+        for (let yy = rr; yy < s0.sh - rr; yy++) for (let xx = rr; xx < W0 - rr; xx++) {
+          const j = yy * W0 + xx;
+          const blur = (src0[j - rr] + src0[j + rr] + src0[j - rr * W0] + src0[j + rr * W0]) / 4;
+          const v = Math.max(0, Math.min(255, src0[j] + 1.6 * (src0[j] - blur)));
+          const i = j * 4; dd[i] = dd[i + 1] = dd[i + 2] = v;
+        }
+      }
+      x.putImageData(id, s0.dx, s0.dy);
+    }
+    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
+    const r = await OCR.recognize(new Uint8Array(await blob.arrayBuffer()), true);
+    return parseTsvLinks(r.tsv || '', segs);
+  }
+
+  function parseTsvLinks(tsv, segs) {
+    const lines = new Map();
+    for (const ln of tsv.split('\n')) {
+      const f = ln.split('\t');
+      if (f.length < 12 || f[0] !== '5') continue;
+      const txt = f.slice(11).join('\t').trim(); if (!txt) continue;
+      const key = f[2] + '.' + f[3] + '.' + f[4];
+      const word = { t: txt, x: +f[6], y: +f[7], w: +f[8], h: +f[9], conf: +f[10] };
+      if (!lines.has(key)) lines.set(key, []);
+      lines.get(key).push(word);
+    }
+    const out = [], all = [];
+    for (const words of lines.values()) {
+      const text = words.map(w => w.t).join(' ');
+      all.push(text);
+      for (const url of extractLinks(text)) {
+        const host = new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+        const part = words.filter(w => { const t = w.t.toLowerCase().replace(/[^a-z0-9.\-/:]/g, ''); return t.length > 2 && (host.includes(t.replace(/^(https?:\/\/)?(www\.)?/, '').split('/')[0]) || t.includes(host)); });
+        let ws = part.length ? part : words;
+        /* inclui a terminação lida separada ("youtube" + "con]") */
+        const last = words.indexOf(ws[ws.length - 1]);
+        if (last >= 0 && words[last + 1] && /^[.,]?(com|con|corn|c0m|br|net|org|gov|io)\W*$/i.test(words[last + 1].t)) ws = ws.concat(words[last + 1]);
+        const x0 = Math.min(...ws.map(w => w.x)), y0 = Math.min(...ws.map(w => w.y)), x1 = Math.max(...ws.map(w => w.x + w.w)), y1 = Math.max(...ws.map(w => w.y + w.h));
+        const seg = segs.find(s0 => (y0 + y1) / 2 >= s0.dy - 12 && (y0 + y1) / 2 <= s0.dy + s0.sh + 12) || segs[0];
+        const box = [seg.fx + (x0 - seg.dx) / seg.scale, seg.fy + (y0 - seg.dy) / seg.scale, (x1 - x0) / seg.scale, (y1 - y0) / seg.scale];
+        const label = ws.map(w => w.t).join(' ');
+        out.push({ url, box, label, conf: Math.min(...ws.map(w => w.conf)), explicit: /^(https?:|www\.)/i.test(label.trim()) });
+      }
+    }
+    return { links: out, text: all.join('\n') };
+  }
+
   /* ───────── Leitura ao vivo na câmera ───────── */
   const L = {
-    enabled: true, running: false, timer: null, frameCanvas: null, frameCtx: null,
+    clusters: [], enabled: true, running: false, timer: null, frameCanvas: null, frameCtx: null, pass: 0, ticks: 0, statusMsg: '',
     lastSeen: new Map(),        /* conteúdo -> último instante visto */
     blocked: new Map(),         /* conteúdo -> não reabrir enquanto continuar visível */
     ocrHits: new Map(), lastOcr: 0, ocrRunning: false,
@@ -205,11 +379,21 @@
   function loadPref() { try { const v = localStorage.getItem('gs_linkscan'); if (v !== null) L.enabled = v === '1'; } catch (e) { } }
   function savePref() { try { localStorage.setItem('gs_linkscan', L.enabled ? '1' : '0'); } catch (e) { } }
 
+  function setStatus(msg, kind) {
+    L.statusMsg = msg;
+    const b = $('linkBadge'); if (!b) return;
+    b.textContent = msg; b.className = 'link-badge' + (kind ? ' ' + kind : '') + (b.classList.contains('hidden') ? ' hidden' : '');
+  }
+
   function updateToggle() {
     const b = $('linkBtn');
     if (b) { b.classList.toggle('active', L.enabled); b.setAttribute('aria-pressed', L.enabled ? 'true' : 'false'); }
     const badge = $('linkBadge');
-    if (badge) badge.classList.toggle('hidden', !(L.enabled && shouldScan()));
+    if (badge) {
+      const chipOn = $('linkChip') && !$('linkChip').classList.contains('hidden');
+      badge.classList.toggle('hidden', !(L.enabled && shouldScan()) || chipOn);
+      if (!L.statusMsg) badge.textContent = OCR.canWorker() ? '🔗 Procurando QR Code e links' : '🔗 Procurando QR Code';
+    }
   }
 
   function shouldScan() {
@@ -237,47 +421,169 @@
     const m = root.GSApp.getVideoMapping();
     let sx = 0, sy = 0, sw = vw, sh = vh;
     if (m) { sx = Math.max(0, -m.ox / m.s); sy = Math.max(0, -m.oy / m.s); sw = Math.min(vw - sx, m.W / m.s); sh = Math.min(vh - sy, m.H / m.s); }
-    const sc = Math.min(1, 800 / Math.max(sw, sh));
+    const vis = { x: sx, y: sy, w: sw, h: sh };   /* parte do vídeo que aparece na tela */
+    /* alterna: imagem visível inteira (reduzida) e o centro em resolução
+       nativa — QR pequeno/distante só é legível no recorte central */
+    L.pass = (L.pass + 1) % 2;
+    if (L.pass === 1) {
+      const cw = Math.min(sw, Math.max(480, sw * 0.5)), ch = Math.min(sh, Math.max(480, sh * 0.5));
+      sx = sx + (sw - cw) / 2; sy = sy + (sh - ch) / 2; sw = cw; sh = ch;
+    }
+    const sc = Math.min(1, (L.pass === 1 ? 900 : 800) / Math.max(sw, sh));
     const w = Math.round(sw * sc), h = Math.round(sh * sc);
     if (L.frameCanvas.width !== w || L.frameCanvas.height !== h) { L.frameCanvas.width = w; L.frameCanvas.height = h; }
     L.frameCtx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
     const now = performance.now();
     let found = [];
-    try { found = await readQR(L.frameCanvas, L.frameCtx); } catch (e) { console.warn('QR:', e); }
+    try { found = await readQR(L.frameCanvas, L.frameCtx, L.pass === 0 ? true : (L.ticks++ % 2 === 0)); }
+    catch (e) { console.warn('QR:', e); setStatus('⚠️ Erro no leitor de QR: ' + (e.message || e), 'err'); }
     if (!L.enabled || !shouldScan()) { clearOverlay(); schedule(300); return; }
     if (found.length) {
       const q = found[0];
       L.lastBox = q.corners.map(p => [sx + p[0] / sc, sy + p[1] / sc]); L.lastBoxT = now;
       drawBox(L.lastBox, q.raw);
       handleDetection(q.raw, 'qr', now);
-    } else if (now - L.lastBoxT > 400) clearOverlay();
+    } else if (now - L.lastBoxT > 400 && !(L.textBox && now - L.textBox.t < 1500)) clearOverlay();
     releaseBlocks(now);
 
-    /* OCR de links impressos, em paralelo e num ritmo menor */
-    if (!L.ocrRunning && OCR.canWorker() && now - L.lastOcr > 800 && !found.length) {
+    /* Links escritos: linhas de texto localizadas + leitura ampliada (rápida
+       para texto pequeno); a cada 3 leituras, também o quadro inteiro. */
+    if (!L.ocrRunning && OCR.canWorker() && now - L.lastOcr > 450 && !found.length) {
       L.ocrRunning = true; L.lastOcr = now;
-      /* quadro inteiro (o texto pode passar um pouco da borda visível) */
-      ocrPng(video, 0, 0, vw, vh, 1280).then(png => OCR.recognize(png)).then(r => {
-        if (!L.enabled) return;
-        const links = extractLinks(r.text);
-        const t = performance.now();
-        const keys = new Set();
-        for (const url of links) {
-          /* agrupa leituras pelo domínio; guarda a versão mais completa do endereço */
-          const key = new URL(url).hostname.replace(/^www\./, '');
-          keys.add(key);
-          const h = L.ocrHits.get(key) || { n: 0, url };
-          h.n++; if (url.length > h.url.length) h.url = url;
-          L.ocrHits.set(key, h);
-          L.lastSeen.set(h.url, t); L.lastSeen.set(key, t);
-          /* link impresso precisa aparecer em 2 leituras seguidas (evita falsos positivos) */
-          if (h.n >= 2 && !L.blocked.has(key)) { L.blocked.set(key, t); handleDetection(h.url, 'ocr', t); }
+      L.ocrTurn = (L.ocrTurn || 0) + 1;
+      const job = (async () => {
+        if (L.ocrTurn % 3 === 0) {
+          const png = await ocrPng(video, vis.x, vis.y, vis.w, vis.h, 1280);
+          const r = await OCR.recognize(png);
+          return { text: r.text, links: extractLinks(r.text).map(url => ({ url, box: null, label: url, explicit: /^(https?:|www\.)/i.test(url.replace(/^https:\/\/(?=www\.)/, '')) })) };
         }
-        for (const k of Array.from(L.ocrHits.keys())) if (!keys.has(k)) L.ocrHits.delete(k);
-      }).catch(e => { if (!/indisponível/.test(e.message)) console.warn('OCR:', e.message); })
-        .finally(() => { L.ocrRunning = false; });
+        /* só o texto que aparece na tela (como a câmera do iPhone) */
+        const mx = vis.w * 0.03, my = vis.h * 0.03;
+        const regs = findTextRegions(video, vw, vh, 24).filter(r => {
+          const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+          return cx > vis.x - mx && cx < vis.x + vis.w + mx && cy > vis.y - my && cy < vis.y + vis.h + my;
+        }).slice(0, 10);
+        return ocrRegions(video, vw, vh, regs);
+      })();
+      job.then(res => {
+        if (DEBUG) console.info('[links] OCR', L.ocrTurn % 3 === 0 ? '(quadro)' : '(regiões)', JSON.stringify(res.text || ''), res.links.map(l => l.url));
+        if (!L.enabled || !shouldScan()) return;
+        L.ocrOk = true;
+        onTextLinks(res.links, performance.now());
+      }).catch(e => {
+        console.warn('OCR:', e.message);
+        L.ocrErr = (L.ocrErr || 0) + 1;
+        if (L.ocrErr >= 2 || OCR.failed) { OCR.failed = true; setStatus('🔗 QR ativo · links escritos: leitura de texto indisponível neste aparelho (use 📸 foto)', 'warn'); }
+      }).finally(() => { L.ocrRunning = false; });
     }
     schedule(found.length ? 350 : 260);
+  }
+
+  /* Link de texto reconhecido: marca com cantoneiras amarelas, mostra o selo
+     com o domínio e o texto ampliado, e abre a prévia (como a câmera do iPhone).
+     Abre na 1ª leitura quando o texto começa com "www." ou "http"; nos demais
+     casos, após 2 leituras iguais (evita abrir por engano). */
+  function lev(a, b) {
+    if (Math.abs(a.length - b.length) > 3) return 9;
+    const d = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+      let prev = d[0]; d[0] = i;
+      for (let j = 1; j <= b.length; j++) { const tmp = d[j]; d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1)); prev = tmp; }
+    }
+    return d[b.length];
+  }
+  /* Leituras do mesmo link com pequenos erros do OCR ("gslene-demo",
+     "mww.gsiens-demo") são agrupadas; abre UMA vez, com a versão mais lida. */
+  function clusterFor(hostName) {
+    for (const c of L.clusters) for (const h0 of c.hosts) if (h0 === hostName || (Math.min(h0.length, hostName.length) > 5 && lev(h0, hostName) <= 2)) return c;
+    const c = { hosts: new Set(), variants: new Map(), n: 0, last: 0, opened: false };
+    L.clusters.push(c);
+    return c;
+  }
+  function bestUrl(c) {
+    let best = null, bc = -1;
+    for (const [u, k] of c.variants) if (k > bc || (k === bc && u.length > best.length)) { best = u; bc = k; }
+    return best;
+  }
+  function onTextLinks(links, t) {
+    L.clusters = (L.clusters || []).filter(c => t - c.last < 4500);   /* saiu de vista: pode abrir de novo */
+    const seen = new Set();
+    for (const lk of links) {
+      const hostName = new URL(lk.url).hostname.replace(/^www\./, '');
+      const c = clusterFor(hostName);
+      c.hosts.add(hostName);
+      c.variants.set(lk.url, (c.variants.get(lk.url) || 0) + 1);
+      if (!seen.has(c)) { c.n++; seen.add(c); }
+      c.last = t;
+      const url = bestUrl(c);
+      if (lk.box) { L.textBox = { box: lk.box, t }; drawBrackets(lk.box); }
+      showChip(host(url), url, url.replace(/^https?:\/\//, '').replace(/\/$/, ''));
+      /* parte de um domínio maior já visto ("demo.com.br" de "gslens-demo.com.br") */
+      const partial = L.clusters.some(o => o !== c && Array.from(o.hosts).some(h0 => h0.endsWith('-' + hostName) || h0.endsWith('.' + hostName)));
+      if (!partial && !c.opened && (c.n >= 2 || lk.explicit)) {
+        c.opened = true;
+        setTimeout(() => {          /* deixa ver a marcação; usa a melhor leitura até aqui */
+          if (!L.enabled || !shouldScan()) { c.opened = false; return; }
+          if (navigator.vibrate) try { navigator.vibrate(30); } catch (e) { }
+          open({ kind: 'url', url: bestUrl(c), raw: bestUrl(c) }, 'Link escrito');
+        }, 650);
+      }
+    }
+    if (!links.length && L.textBox && t - L.textBox.t > 1500) { L.textBox = null; clearOverlay(); hideChip(); }
+  }
+
+  function overlayCtx() {
+    const cv = $('linkCanvas'); if (!cv) return null;
+    const vf = $('viewfinder'), m = root.GSApp.getVideoMapping(); if (!m) return null;
+    const dpr = Math.min(2, root.devicePixelRatio || 1);
+    const W2 = vf.clientWidth, H2 = vf.clientHeight;
+    if (cv.width !== Math.round(W2 * dpr) || cv.height !== Math.round(H2 * dpr)) { cv.width = Math.round(W2 * dpr); cv.height = Math.round(H2 * dpr); }
+    const ctx = cv.getContext('2d');
+    const P = p => { let X = m.ox + p[0] * m.s, Y = m.oy + p[1] * m.s; if (m.mirror) X = W2 - X; return [X * dpr, Y * dpr]; };
+    return { ctx, P, dpr, cv };
+  }
+  /* cantoneiras amarelas em volta do texto (estilo Texto ao Vivo) */
+  function drawBrackets(box) {
+    const o = overlayCtx(); if (!o) return;
+    const { ctx, P, dpr, cv } = o;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const pad = box[3] * 0.5;
+    let a = P([box[0] - pad, box[1] - pad]), b = P([box[0] + box[2] + pad, box[1] + box[3] + pad]);
+    const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]), y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
+    const L3 = Math.max(8 * dpr, Math.min(22 * dpr, (y1 - y0) * 0.6, (x1 - x0) * 0.25));
+    ctx.strokeStyle = '#ffd60a'; ctx.lineWidth = 2.5 * dpr; ctx.lineCap = 'round';
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 4 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0 + L3); ctx.lineTo(x0, y0); ctx.lineTo(x0 + L3, y0);
+    ctx.moveTo(x1 - L3, y0); ctx.lineTo(x1, y0); ctx.lineTo(x1, y0 + L3);
+    ctx.moveTo(x1, y1 - L3); ctx.lineTo(x1, y1); ctx.lineTo(x1 - L3, y1);
+    ctx.moveTo(x0 + L3, y1); ctx.lineTo(x0, y1); ctx.lineTo(x0, y1 - L3);
+    ctx.stroke();
+  }
+  /* selo com o domínio (toque abre) + texto reconhecido ampliado */
+  function showChip(hostName, url, label) {
+    const chip = $('linkChip'); if (!chip) return;
+    chip.dataset.url = url;
+    $('linkChipText').textContent = hostName;
+    chip.classList.remove('hidden');
+    const bd = $('linkBadge'); if (bd) bd.classList.add('hidden');
+    const z = $('linkZoom');
+    if (z && label) { z.textContent = label; z.classList.remove('hidden'); clearTimeout(L.zoomT); L.zoomT = setTimeout(() => z.classList.add('hidden'), 1800); }
+    clearTimeout(L.chipT); L.chipT = setTimeout(hideChip, 6000);
+  }
+  function hideChip() { const c = $('linkChip'); if (c) c.classList.add('hidden'); const z = $('linkZoom'); if (z) z.classList.add('hidden'); updateToggle(); }
+  function chipTap() {
+    const c = $('linkChip'); if (!c || !c.dataset.url) return;
+    const now = performance.now(), key = host(c.dataset.url);
+    L.blocked.set(key, now); L.blocked.set(c.dataset.url, now); L.lastSeen.set(key, now);
+    const cl = clusterFor(key); cl.hosts.add(key); cl.opened = true; cl.last = now;
+    open({ kind: 'url', url: c.dataset.url, raw: c.dataset.url }, 'Link escrito');
+  }
+  function togglePreview() {
+    const card = $('webCard'), b = $('webHideBtn');
+    const col = !card.classList.contains('collapsed');
+    card.classList.toggle('collapsed', col);
+    b.textContent = col ? 'Mostrar pré-visualização' : 'Ocultar pré-visualização';
   }
 
   function releaseBlocks(now) {
@@ -294,7 +600,7 @@
     const parsed = source === 'ocr' ? { kind: 'url', url: raw, raw } : parseContent(raw);
     if (parsed.kind === 'empty') return;
     if (navigator.vibrate) try { navigator.vibrate(30); } catch (e) { }
-    open(parsed, source === 'ocr' ? 'Link impresso' : 'QR Code');
+    open(parsed, source === 'ocr' ? 'Link escrito' : 'QR Code');
   }
 
   /* contorno do QR detectado sobre o visor */
@@ -307,7 +613,7 @@
     const ctx = cv.getContext('2d');
     ctx.clearRect(0, 0, cv.width, cv.height);
     const P = p => { let X = m.ox + p[0] * m.s, Y = m.oy + p[1] * m.s; if (m.mirror) X = W - X; return [X * dpr, Y * dpr]; };
-    ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#32d74b'; ctx.fillStyle = 'rgba(50,215,75,.16)';
+    ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#ffd60a'; ctx.fillStyle = 'rgba(255,214,10,.14)';
     ctx.beginPath(); corners.forEach((p, i) => { const q = P(p); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }); ctx.closePath(); ctx.fill(); ctx.stroke();
   }
   function clearOverlay() { const cv = $('linkCanvas'); if (cv && cv.width) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height); }
@@ -319,6 +625,9 @@
   function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
   function showSheet() {
+    hideChip(); clearOverlay();
+    $('webCard').classList.remove('collapsed'); $('webHideBtn').textContent = 'Ocultar pré-visualização';
+    $('webHideBtn').classList.toggle('hidden', !W.url);
     $('webSheet').classList.remove('hidden');
     document.body.classList.add('sheet-open');
   }
@@ -431,6 +740,7 @@
     const f = $('webFrame'); if (f) { const b = document.createElement('iframe'); b.id = 'webFrame'; b.className = 'web-frame'; b.title = 'Página'; f.replaceWith(b); }   /* descarrega a página (para áudio/vídeo dela) */
     const now = performance.now();
     for (const k of L.blocked.keys()) { L.blocked.set(k, now); L.lastSeen.set(k, now); }
+    for (const c of (L.clusters || [])) { c.last = now + 1500; c.opened = true; }
     if (L.enabled && !L.timer) schedule(500);
   }
   function reload() { if (W.url) loadFrame(W.url); }
@@ -452,10 +762,11 @@
 
   /* ───────── Leitura de uma foto da galeria ───────── */
   async function scanImage(img, onStatus) {
-    const sc = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+    const iw = img.naturalWidth || img.videoWidth || img.width, ih = img.naturalHeight || img.videoHeight || img.height;
+    const sc = Math.min(1, 1600 / Math.max(iw, ih));
     const mk = (flip) => {
       const c = document.createElement('canvas');
-      c.width = Math.round(img.naturalWidth * sc); c.height = Math.round(img.naturalHeight * sc);
+      c.width = Math.round(iw * sc); c.height = Math.round(ih * sc);
       const ctx = c.getContext('2d', { willReadFrequently: true });
       if (flip) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
       ctx.drawImage(img, 0, 0, c.width, c.height);
@@ -475,17 +786,34 @@
       const png = await ocrPng(v.c, 0, 0, v.c.width, v.c.height, 1600);
       const r = await OCR.recognize(png);
       const links = extractLinks(r.text);
-      if (links.length) return { parsed: { kind: 'url', url: links[0], raw: links[0] }, source: 'Link impresso', all: links, text: r.text };
+      if (links.length) return { parsed: { kind: 'url', url: links[0], raw: links[0] }, source: 'Link escrito', all: links, text: r.text };
       if (!k) lastText = r.text;
     }
     return { parsed: null, text: lastText };
+  }
+
+  /* Modo Foto: ao tirar a foto, procura QR Code e link HTTPS nela e abre
+     o mini navegador (complementa a leitura ao vivo). */
+  let captureBusy = false;
+  async function scanCapture(canvas) {
+    if (!L.enabled || captureBusy) return;
+    captureBusy = true;
+    try {
+      const r = await scanImage(canvas, null);
+      if (r && r.parsed && $('webSheet').classList.contains('hidden')) {
+        const key = r.parsed.url || r.parsed.raw;
+        L.blocked.set(key, performance.now()); L.lastSeen.set(key, performance.now());
+        open(r.parsed, r.source === 'QR Code' ? 'QR Code (foto)' : 'Link na foto');
+      }
+    } catch (e) { console.warn('Leitura da foto:', e.message || e); }
+    finally { captureBusy = false; }
   }
 
   document.addEventListener('visibilitychange', onVisibility);
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('webSheet').classList.contains('hidden')) close(); });
 
   root.LinkScan = {
-    start, toggle, close, reload, openExternal, copyUrl, share, open, openUrl, scanImage,
+    start, toggle, close, scanCapture, chipTap, togglePreview, _findTextRegions: findTextRegions, _ocrRegions: ocrRegions, reload, openExternal, copyUrl, share, open, openUrl, scanImage,
     parseContent, extractLinks, normalizeUrl, wake: () => { if (L.enabled && !L.timer) schedule(200); updateToggle(); },
     get enabled() { return L.enabled; }, _state: L, _ocr: OCR
   };

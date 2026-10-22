@@ -2,7 +2,7 @@
    Estratégia "rede primeiro, cache como reserva": sempre busca a versão
    mais nova quando há conexão (evita servir código desatualizado após
    atualizações) e permite abrir o app offline com o que já foi carregado. */
-const CACHE = 'gslens-v4';
+const CACHE = 'gslens-v7';
 const CORE = [
   './', './index.html', './manifest.webmanifest',
   './css/style.css', './css/vendor/bootstrap4.local.css',
@@ -31,8 +31,16 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin && !url.hostname.endsWith('cdnjs.cloudflare.com')) return;
+  /* CORREÇÃO: revalida sempre com o servidor (cache:'no-cache'). Antes o
+     fetch podia receber do cache HTTP um script.js antigo junto com o
+     index.html novo após publicar uma atualização — o leitor de QR/links
+     simplesmente não iniciava. */
+  const sameOrigin = url.origin === location.origin;
   e.respondWith(
-    fetch(req).then(res => {
+    /* requisições de navegação não podem ser recriadas com new Request(req, …) */
+    fetch(!sameOrigin ? req
+      : req.mode === 'navigate' ? new Request(req.url, { cache: 'no-cache', credentials: 'same-origin' })
+      : new Request(req, { cache: 'no-cache' })).then(res => {
       if (res && res.ok && (res.type === 'basic' || res.type === 'cors')) {
         const copy = res.clone();
         caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
