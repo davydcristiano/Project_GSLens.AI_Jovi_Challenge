@@ -18,17 +18,17 @@
        com boa aparência mesmo sem baixar fontes externas. -->
 
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
-  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261022b">
+  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261022c">
 
   <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
        PDF em lote e pela prancha imprimível do Scanner 3D.
        Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
        a tela mostra os mesmos dados em lista em vez de quebrar. -->
-  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261022b" defer></script>
+  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261022c" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
-  <link rel="stylesheet" href="css/style.css?v=20261022b">
+  <link rel="stylesheet" href="css/style.css?v=20261022c">
 </head>
 
 <body class="theme-dark">
@@ -183,6 +183,16 @@
       <div class="pinch-hint hidden" id="pinchHint">👌 Pinça para zoom</div>
 
       <!-- Processamento do Scanner 3D -->
+      <div class="scan-proc hidden" id="camProc" role="dialog" aria-modal="true" aria-labelledby="camProcTitle">
+        <div class="scan-proc-card">
+          <div class="scan-spinner" aria-hidden="true"></div>
+          <div class="scan-proc-title" id="camProcTitle">Processando</div>
+          <div class="scan-proc-msg" id="camProcMsg" role="status" aria-live="polite">…</div>
+          <div class="scan-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="scan-progress-bar" id="camProcBar"></div></div>
+          <div class="scan-proc-pct" id="camProcPct">0%</div>
+          <button class="btn btn-sm btn-outline-light hidden" id="camProcCancel" onclick="if(slowSignal)slowSignal.cancel=true">✕ Cancelar</button>
+        </div>
+      </div>
       <div class="scan-proc hidden" id="scanProc" role="dialog" aria-modal="true" aria-labelledby="scanProcTitle">
         <div class="scan-proc-card">
           <div class="scan-spinner" aria-hidden="true"></div>
@@ -730,24 +740,25 @@
 
   <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
   <!-- Leitor de QR (jsQR, Apache-2.0) + filtros e molduras + leitor de links -->
-  <script src="js/vendor/jsqr/jsQR.js?v=20261022b" defer></script>
-  <script src="js/filters.js?v=20261022b"></script>
-  <script src="js/frames.js?v=20261022b"></script>
-  <script src="js/links/linkscan.js?v=20261022b"></script>
-  <script src="js/vendor/aruco/cv.js?v=20261022b"></script>
-  <script src="js/vendor/aruco/aruco.js?v=20261022b"></script>
+  <script src="js/vendor/jsqr/jsQR.js?v=20261022c" defer></script>
+  <script src="js/filters.js?v=20261022c"></script>
+  <script src="js/frames.js?v=20261022c"></script>
+  <script src="js/links/linkscan.js?v=20261022c"></script>
+  <script src="js/nightslow.js?v=20261022c"></script>
+  <script src="js/vendor/aruco/cv.js?v=20261022c"></script>
+  <script src="js/vendor/aruco/aruco.js?v=20261022c"></script>
   <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
-  <script src="js/scan3d/math.js?v=20261022b"></script>
-  <script src="js/scan3d/board.js?v=20261022b"></script>
-  <script src="js/scan3d/tracker.js?v=20261022b"></script>
-  <script src="js/scan3d/segment.js?v=20261022b"></script>
-  <script src="js/scan3d/reconstruct.js?v=20261022b"></script>
-  <script src="js/scan3d/texture.js?v=20261022b"></script>
-  <script src="js/scan3d/pipeline.js?v=20261022b"></script>
-  <script src="js/scan3d/exporters.js?v=20261022b"></script>
-  <script src="js/scan3d/viewer.js?v=20261022b"></script>
-  <script src="js/scan3d/app.js?v=20261022b"></script>
-  <script src="js/script.js?v=20261022b"></script>
+  <script src="js/scan3d/math.js?v=20261022c"></script>
+  <script src="js/scan3d/board.js?v=20261022c"></script>
+  <script src="js/scan3d/tracker.js?v=20261022c"></script>
+  <script src="js/scan3d/segment.js?v=20261022c"></script>
+  <script src="js/scan3d/reconstruct.js?v=20261022c"></script>
+  <script src="js/scan3d/texture.js?v=20261022c"></script>
+  <script src="js/scan3d/pipeline.js?v=20261022c"></script>
+  <script src="js/scan3d/exporters.js?v=20261022c"></script>
+  <script src="js/scan3d/viewer.js?v=20261022c"></script>
+  <script src="js/scan3d/app.js?v=20261022c"></script>
+  <script src="js/script.js?v=20261022c"></script>
 </body>
 
 </html>

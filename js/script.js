@@ -389,6 +389,7 @@ async function initCamera() {
     toast(hasAudio ? t('cameraReady') : '📷 Câmera pronta (sem microfone — vídeos sem áudio)');
     if (currentMode === 'ar' && window.Scan3D) Scan3D.enter();
     if (currentMode === 'efeitos') startFx(currentFx);
+    if (currentMode === 'noite') startNightPreview();
     if (window.LinkScan) LinkScan.wake();
   } catch(e) {
     console.error('Câmera:', e);
@@ -410,7 +411,7 @@ function goHome() {
   cancelTimer();
   if (isRecording) stopRecording();
   if (window.Scan3D) Scan3D.release();
-  stopFx(); stopStream();
+  stopFx(); stopNightPreview(); stopStream();
   hideAllScreens();
   document.getElementById('homeScreen').style.display = '';
   document.getElementById('statusDot').classList.remove('active');
@@ -448,6 +449,7 @@ async function flipCamera() {
   if (flashEnabled) applyTorch(true);
   if (zoomLevel !== 1) setZoom(zoomLevel);
   if (window.Scan3D) Scan3D.onCameraChanged();
+  if (currentMode === 'noite') setTrackExposure(Math.max(evLevel, 1.5));
   cameraBusy = false;
   toast(useFront ? '🤳 Câmera frontal' : '📷 Câmera traseira');
 }
@@ -744,17 +746,71 @@ function setFilter(fx, el) {
 
 /* Prévia do filtro na câmera: CSS para os filtros originais; WebGL
    (resultado idêntico ao da foto) para os clássicos/modernos. */
+let previewBaseCss = 'none', nightCss = '';
 function applyLivePreview(fx) {
   const video = document.getElementById('video');
   if (!video) return;
   if (window.GSFilters && GSFilters.has(fx)) {
     const ok = stream && GSFilters.startPreview(document.getElementById('filterCanvas'), video, fx);
-    video.style.filter = ok ? 'none' : GSFilters.cssFallback(fx);
+    previewBaseCss = ok ? 'none' : GSFilters.cssFallback(fx);
   } else {
     if (window.GSFilters) GSFilters.stopPreview();
-    video.style.filter = CSS_FILTER_PREVIEW[fx] || 'none';
+    previewBaseCss = CSS_FILTER_PREVIEW[fx] || 'none';
   }
+  paintPreviewCss();
 }
+
+/* combina o filtro escolhido com o clareamento do modo Noite */
+function paintPreviewCss() {
+  const video = document.getElementById('video'), fc = document.getElementById('filterCanvas');
+  const base = previewBaseCss === 'none' ? '' : previewBaseCss;
+  video.style.filter = (nightCss + ' ' + base).trim() || 'none';
+  if (fc) fc.style.filter = nightCss || '';
+}
+
+/* ── Modo Noite: prévia clareada conforme a luz do ambiente ── */
+let nightTimer = null, nightBusy = false;
+function startNightPreview() {
+  stopNightPreview();
+  if (!window.GSNight) return;
+  GSNight.resetGain();
+  const tick = () => {
+    if (currentMode !== 'noite') { stopNightPreview(); return; }
+    const v = document.getElementById('video');
+    if (stream && v.videoWidth) {
+      const g = GSNight.liveGain(v);
+      nightCss = `brightness(${g.toFixed(2)}) contrast(1.06) saturate(${(1 - (g - 1) * 0.08).toFixed(2)})`;
+      paintPreviewCss();
+    }
+    nightTimer = setTimeout(tick, 250);
+  };
+  tick();
+  /* exposição de hardware mais alta, quando a câmera permite (Android/Chrome) */
+  setTrackExposure(Math.max(evLevel, 1.5));
+}
+function stopNightPreview() {
+  if (nightTimer) { clearTimeout(nightTimer); nightTimer = null; }
+  if (nightCss) { nightCss = ''; paintPreviewCss(); }
+}
+function setTrackExposure(ev) {
+  const track = stream && stream.getVideoTracks()[0];
+  if (!track || !track.getCapabilities) return;
+  const caps = track.getCapabilities();
+  if (!caps.exposureCompensation) return;
+  const v = Math.min(caps.exposureCompensation.max, Math.max(caps.exposureCompensation.min, ev));
+  track.applyConstraints({ advanced:[{ exposureCompensation: v }] }).catch(()=>{});
+}
+
+function showCamProc(title, msg, pct, cancellable) {
+  const el = document.getElementById('camProc');
+  el.classList.remove('hidden');
+  document.getElementById('camProcTitle').textContent = title;
+  document.getElementById('camProcMsg').textContent = msg;
+  document.getElementById('camProcBar').style.width = Math.round(pct * 100) + '%';
+  document.getElementById('camProcPct').textContent = Math.round(pct * 100) + '%';
+  document.getElementById('camProcCancel').classList.toggle('hidden', !cancellable);
+}
+function hideCamProc() { document.getElementById('camProc').classList.add('hidden'); }
 
 function filterName(fx) {
   if (fx === 'none') return 'Normal';
@@ -898,6 +954,8 @@ function setMode(mode) {
   document.getElementById('cameraScreen').classList.toggle('mode-fx', isFx);
 
   if (isFx) startFx(currentFx); else stopFx();
+  if (mode === 'noite') startNightPreview();
+  else if (prev === 'noite') { stopNightPreview(); setTrackExposure(evLevel); }
   if (prev === 'ar' && !isAR && window.Scan3D) Scan3D.exit();
   if (isAR) {
     if (window.Scan3D) Scan3D.enter();
@@ -931,28 +989,30 @@ function pickRecorderMime() {
   return opts.find(m => MediaRecorder.isTypeSupported(m)) || '';
 }
 
-function startRecording() {
+let recordFps = 30, recordStartT = 0, slowBusy = false, slowSignal = null;
+async function startRecording() {
   if (!stream) { toast('⚠️ Câmera não está ativa'); return; }
   if (!window.MediaRecorder) { toast('⚠️ Este navegador não grava vídeo'); return; }
+  if (slowBusy) { toast('⏳ Aguarde o processamento do Slow-Mo'); return; }
   recordedChunks = [];
   recordMode = currentMode;     /* CORREÇÃO: o modo era lido só ao parar (podia já ter mudado) */
   const v = document.getElementById('video');
-  recordSize = { w: v.videoWidth, h: v.videoHeight };
 
-  if (currentMode === 'slowmo') {
-    const track = stream.getVideoTracks()[0];
-    if (track && track.getCapabilities) {
-      const caps = track.getCapabilities();
-      if (caps.frameRate && caps.frameRate.max >= 60)
-        track.applyConstraints({ frameRate:{ ideal:Math.min(120, caps.frameRate.max) } }).catch(()=>{});
-    }
+  let recStream = stream;
+  if (recordMode === 'slowmo') {
+    /* pede a maior taxa de quadros da câmera ANTES de gravar (antes não
+       esperava a mudança) e grava só a imagem — o áudio desacelerado
+       ficaria distorcido */
+    recordFps = window.GSSlowMo ? await GSSlowMo.prepare(stream.getVideoTracks()[0]) : 30;
+    recStream = new MediaStream(stream.getVideoTracks());
   }
+  recordSize = { w: v.videoWidth, h: v.videoHeight };
 
   const mime = pickRecorderMime();
   try {
-    mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    mediaRecorder = mime ? new MediaRecorder(recStream, { mimeType: mime }) : new MediaRecorder(recStream);
   } catch(e) {
-    try { mediaRecorder = new MediaRecorder(stream); }
+    try { mediaRecorder = new MediaRecorder(recStream); }
     catch (e2) { toast('⚠️ Não foi possível iniciar a gravação'); return; }
   }
   recordMime = (mediaRecorder.mimeType || mime || 'video/webm').split(';')[0];
@@ -962,6 +1022,7 @@ function startRecording() {
   mediaRecorder.onerror = e => { console.error('MediaRecorder:', e); toast('⚠️ Erro na gravação'); };
   mediaRecorder.start(250);
   isRecording = true;
+  recordStartT = performance.now();
 
   document.querySelector('.shutter').classList.add('recording');
   const badge = document.getElementById('recBadge');
@@ -973,12 +1034,13 @@ function startRecording() {
     badge.innerHTML =
       `<span class="rec-dot"></span>REC ${String(Math.floor(recordSeconds/60)).padStart(2,'0')}:${String(recordSeconds%60).padStart(2,'0')}`;
   }, 1000);
-  toast(t('videoStart'));
+  toast(recordMode === 'slowmo' ? `🐌 Gravando a ${Math.round(recordFps)} fps` : t('videoStart'));
 }
 
 function stopRecording() {
   if (!mediaRecorder || !isRecording) return;
   isRecording = false;
+  recordDur = (performance.now() - recordStartT) / 1000;
   try { mediaRecorder.stop(); } catch (e) { console.warn(e); }
   clearInterval(recordTimer);
   document.querySelector('.shutter').classList.remove('recording');
@@ -988,15 +1050,42 @@ function stopRecording() {
   if (track && recordMode === 'slowmo') track.applyConstraints({ frameRate:{ ideal:30 } }).catch(()=>{});
 }
 
+let recordDur = 0;
 async function saveVideo() {
   if (!recordedChunks.length) { toast('⚠️ Nenhum dado de vídeo gravado'); return; }
-  const blob = new Blob(recordedChunks, { type: recordMime });
+  let blob = new Blob(recordedChunks, { type: recordMime });
   recordedChunks = [];
+  let mime = recordMime, seconds = recordSeconds, w = recordSize.w || 1280, h = recordSize.h || 720, slow = null;
+
+  /* Slow-Mo: gera o arquivo desacelerado de verdade (antes o vídeo era
+     salvo na velocidade normal — igual ao modo Vídeo) */
+  if (recordMode === 'slowmo') {
+    if (window.GSSlowMo && GSSlowMo.supported()) {
+      slowBusy = true; slowSignal = { cancel: false };
+      showCamProc('🐌 Slow-Mo', 'Criando câmera lenta…', 0, true);
+      try {
+        const r = await GSSlowMo.process(blob, { fps: recordFps, seconds: recordDur, signal: slowSignal,
+          onProgress: p => showCamProc('🐌 Slow-Mo', `Criando câmera lenta ${recordFps >= 100 ? '¼×' : '½×'} (gravado a ${Math.round(recordFps)} fps)…`, p, true) });
+        if (r.blob.size > 0) { blob = r.blob; mime = r.mime; seconds = r.seconds; w = r.w; h = r.h; slow = { rate: r.rate, fps: Math.round(recordFps), baked: true }; }
+      } catch (e) {
+        console.warn('Slow-Mo:', e);
+        /* sem reprocessamento: guarda o original e toca desacelerado no app */
+        slow = { rate: recordFps >= 100 ? 0.25 : 0.5, fps: Math.round(recordFps), baked: false };
+        seconds = Math.round(recordDur / slow.rate);
+        if (e.message !== 'cancelado') toast('⚠️ Não foi possível gerar o arquivo lento — reprodução lenta no app');
+      } finally { slowBusy = false; slowSignal = null; hideCamProc(); }
+    } else {
+      slow = { rate: recordFps >= 100 ? 0.25 : 0.5, fps: Math.round(recordFps), baked: false };
+      seconds = Math.round(recordDur / slow.rate);
+    }
+  }
+
   const id   = Date.now();
   const photo = {
-    id, blob, dataUrl: URL.createObjectURL(blob), type:'video', mode: recordMode, mime: recordMime,
-    filter: currentFilter, w: recordSize.w || 1280, h: recordSize.h || 720, seconds: recordSeconds
+    id, blob, dataUrl: URL.createObjectURL(blob), type:'video', mode: recordMode, mime,
+    filter: currentFilter, w, h, seconds
   };
+  if (slow) photo.slow = slow;
   photos.unshift(photo);
   savePhotoToDB(photo).catch(err => { console.warn('Vídeo não persistido:', err); toast('⚠️ Vídeo salvo só nesta sessão (armazenamento cheio?)'); });
   updateThumbFromPhotos();
@@ -1129,11 +1218,13 @@ function drawFxConfetti(ctx,W,H){
 /* ══════════════════════════════════════
    14. CAPTURA
 ══════════════════════════════════════ */
-function capture() {
+async function capture() {
   const video  = document.getElementById('video');
   const canvas = document.getElementById('processCanvas');
   const vw=video.videoWidth, vh=video.videoHeight;
   if (!stream || !vw||!vh) { toast('⚠️ Câmera não pronta'); return; }
+  if (nightBusy) return;
+  const mode = currentMode;
 
   canvas.width=vw; canvas.height=vh;
   const ctx=canvas.getContext('2d', { willReadFrequently:true });
@@ -1142,20 +1233,35 @@ function capture() {
      imagem ampliada mas a foto saía sem zoom. Recorta a mesma região. */
   const z = hwZoom ? 1 : zoomLevel;
   const sw = vw / z, sh = vh / z, sx = (vw - sw) / 2, sy = (vh - sh) / 2;
-  if (useFront) { ctx.translate(vw,0); ctx.scale(-1,1); }
-  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, vw, vh);
-  ctx.setTransform(1,0,0,1,0,0);
+  const grab = () => {
+    if (useFront) { ctx.translate(vw,0); ctx.scale(-1,1); }
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, vw, vh);
+    ctx.setTransform(1,0,0,1,0,0);
+  };
+
+  let nightInfo = null;
+  if (mode==='noite' && window.GSNight) {
+    /* Modo Noite real: vários quadros alinhados e mesclados (menos ruído)
+       + ganho adaptativo. Antes era só um ganho fixo de brilho. */
+    nightBusy = true;
+    const sh = document.querySelector('.shutter'); if (sh) sh.classList.add('busy');
+    showCamProc('🌙 Modo Noite', 'Segure firme…', 0, false);
+    try {
+      nightInfo = await GSNight.capture({ video, ctx, w: vw, h: vh, grab,
+        onProgress: (k, n) => showCamProc('🌙 Modo Noite', `Segure firme… quadro ${k} de ${n}`, k / n, false) });
+    } catch (e) {
+      console.warn('Noite:', e); grab();
+    } finally {
+      nightBusy = false; hideCamProc();
+      if (sh) sh.classList.remove('busy');
+    }
+  } else grab();
 
   /* Modo Foto/Noite/Retrato: procura QR Code e link (https) na foto tirada */
-  if (window.LinkScan && LinkScan.enabled && ['foto','noite','retrato'].includes(currentMode)) {
+  if (window.LinkScan && LinkScan.enabled && ['foto','noite','retrato'].includes(mode)) {
     const copy=document.createElement('canvas'); copy.width=vw; copy.height=vh;
     copy.getContext('2d').drawImage(canvas,0,0);
     setTimeout(()=>LinkScan.scanCapture(copy),50);
-  }
-  if (currentMode==='noite') {
-    const id=ctx.getImageData(0,0,vw,vh);
-    for(let i=0;i<id.data.length;i+=4){id.data[i]=cl(id.data[i]*1.4+18);id.data[i+1]=cl(id.data[i+1]*1.3+12);id.data[i+2]=cl(id.data[i+2]*1.2+8);}
-    ctx.putImageData(id,0,0);
   }
   /* O filtro (como na prévia CSS) afeta só a imagem da câmera, não o efeito */
   applyFilter(ctx,vw,vh,currentFilter,1);
@@ -1163,7 +1269,7 @@ function capture() {
      inteiro do vídeo, ficando deslocado/deformado (o visor usa object-fit:
      cover e mostra só parte do quadro). Agora é posicionado sobre a mesma
      região visível — o resultado fica igual ao que se vê na tela. */
-  if (fxRunning && currentMode === 'efeitos') {
+  if (fxRunning && mode === 'efeitos') {
     const fxc = document.getElementById('fxCanvas');
     const m = getVideoMapping();
     if (fxc && fxc.width && fxc.height && m) ctx.drawImage(fxc, -m.ox0 / m.s0, -m.oy0 / m.s0, m.W / m.s0, m.H / m.s0);
@@ -1174,12 +1280,13 @@ function capture() {
   fl.classList.add('flash'); setTimeout(()=>fl.classList.remove('flash'),350);
 
   const id=Date.now();
-  const photo={ id, dataUrl, w:vw, h:vh, filter:currentFilter, mode:currentMode, fx: currentMode==='efeitos'?currentFx:undefined, type:'photo' };
+  const photo={ id, dataUrl, w:vw, h:vh, filter:currentFilter, mode, fx: mode==='efeitos'?currentFx:undefined, type:'photo' };
+  if (nightInfo) photo.night = nightInfo;
   photos.unshift(photo);
   savePhotoToDB(photo).catch(err => { console.warn(err); toast('⚠️ Foto não salva no armazenamento local'); });
 
   updateThumbFromPhotos();
-  toast(t('captured'));
+  toast(nightInfo ? `🌙 Foto noturna · ${nightInfo.used} quadros mesclados` : t('captured'));
   renderGallery();
 }
 
@@ -1382,9 +1489,18 @@ function openEditModal(idx) {
   document.getElementById('modalImg').classList.toggle('hidden',isVideo);
   document.getElementById('modalVideo').classList.toggle('hidden',!isVideo);
   document.getElementById('editModal').classList.toggle('is-video',isVideo);
-  if (isVideo) { document.getElementById('modalVideo').src=p.dataUrl; }
+  if (isVideo) {
+    const mv=document.getElementById('modalVideo');
+    mv.src=p.dataUrl;
+    /* Slow-Mo sem arquivo reprocessado (navegador sem captureStream): toca desacelerado */
+    const r = p.slow && !p.slow.baked ? p.slow.rate : 1;
+    mv.defaultPlaybackRate = r; mv.playbackRate = r;
+    mv.onloadedmetadata = () => { mv.playbackRate = r; };
+  }
   else { document.getElementById('modalImg').src=originalDataUrl; }
-  document.getElementById('modalMeta').textContent=p.w+'×'+p.h+(isVideo&&p.seconds?' · '+p.seconds+'s':'');
+  document.getElementById('modalMeta').textContent=p.w+'×'+p.h+(isVideo&&p.seconds?' · '+p.seconds+'s':'')
+    +(p.slow?` · Slow-Mo ${p.slow.rate===0.25?'¼×':'½×'} (${p.slow.fps} fps)`:'')
+    +(p.night?` · Noite: ${p.night.used} quadros, ganho ${p.night.gain}×`:'');
   document.getElementById('jpgLabel').textContent = isVideo ? 'Baixar vídeo' : 'Baixar JPG';
   resetEditState();
   openTab(isVideo?'export':'adjust',document.querySelector(`.etab[data-tab="${isVideo?'export':'adjust'}"]`));

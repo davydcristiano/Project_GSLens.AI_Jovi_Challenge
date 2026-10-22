@@ -921,3 +921,7 @@ body.sheet-open{ overflow:hidden; }
 @media (prefers-reduced-motion:reduce){ .web-loading-bar{ animation-duration:3s; } }
 .link-badge.warn{ color:#ffe0a3; border-color:rgba(245,166,35,.6); max-width:calc(100% - 24px); white-space:normal; }
 .link-badge.err{ color:#ffb4bd; border-color:rgba(255,74,94,.6); }
+
+/* Modo Noite: obturador ocupado durante o empilhamento de quadros */
+.shutter.busy .shutter-inner{ background:var(--gold); transform:scale(.8); transition:transform .2s; }
+#camProc{ z-index:21; }

@@ -174,7 +174,7 @@
     size: Math.max(1, Math.min(2, ((root.navigator && navigator.hardwareConcurrency) || 2) >= 6 ? 2 : 1)),
     canWorker() { return !this.failed && /^https?:$/.test(location.protocol) && 'Worker' in root; },
     spawn() {
-      const w = new Worker('js/links/ocr-worker.js?v=20261022b');
+      const w = new Worker('js/links/ocr-worker.js?v=20261022c');
       w.busy = 0;
       w.onmessage = e => { w.busy = Math.max(0, w.busy - 1); const p = this.pending.get(e.data.id); if (!p) return; this.pending.delete(e.data.id); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); };
       w.onerror = e => { console.warn('OCR worker:', e.message); this.failed = true; this.pending.forEach(p => p.reject(new Error('OCR indisponível'))); this.pending.clear(); this.workers = []; };
