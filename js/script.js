@@ -28,7 +28,7 @@ const store = {
    ESTADO GLOBAL
 ══════════════════════════════════════ */
 let stream         = null;
-let useFront       = true;
+let useFront       = false;   /* abre com a câmera TRASEIRA */
 let currentFilter  = 'none';
 let currentMode    = 'foto';
 let currentFx      = 'grid';
@@ -324,7 +324,24 @@ async function openStream(front) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     const err = new Error('getUserMedia indisponível'); err.name = window.isSecureContext ? 'NotSupportedError' : 'SecurityError'; throw err;
   }
-  const video = { facingMode: { ideal: front ? 'user' : 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const facing = front ? 'user' : 'environment';
+  const video = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+  /* Traseira: pede "exact" primeiro — com "ideal" alguns celulares ainda
+     abriam a frontal. Sem câmera traseira (notebook), cai para o "ideal". */
+  if (!front) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: Object.assign({}, video, { facingMode: { exact: 'environment' } }), audio: true });
+      hasAudio = s.getAudioTracks().length > 0;
+      return s;
+    } catch (e) {
+      if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
+        /* microfone negado: tenta só vídeo, ainda com a traseira */
+        try { const s = await navigator.mediaDevices.getUserMedia({ video: Object.assign({}, video, { facingMode: { exact: 'environment' } }), audio: false }); hasAudio = false; return s; }
+        catch (e2) { if (e2 && e2.name === 'NotAllowedError') throw e2; }
+      }
+      /* OverconstrainedError/NotFoundError: não há traseira — segue abaixo */
+    }
+  }
   try {
     const s = await navigator.mediaDevices.getUserMedia({ video, audio: true });
     hasAudio = s.getAudioTracks().length > 0;
@@ -749,15 +766,18 @@ function filterName(fx) {
 /* Miniaturas dos filtros: uma cena de exemplo processada pelo próprio
    filtro (antes eram quadrados cinza com CSS, quase iguais entre si). */
 function sampleThumbCanvas() {
-  const c = document.createElement('canvas'); c.width = c.height = 96;
+  /* Capa só com cores: espectro de matizes (horizontal) do claro ao escuro
+     (vertical), como um seletor de cores. Passando pelo filtro, a capa mostra
+     exatamente o que ele faz com cada cor e com claros/escuros. */
+  const N = 96, c = document.createElement('canvas'); c.width = c.height = N;
   const x = c.getContext('2d', { willReadFrequently: true });
-  const sky = x.createLinearGradient(0, 0, 0, 60); sky.addColorStop(0, '#3d7fd9'); sky.addColorStop(1, '#f2b880');
-  x.fillStyle = sky; x.fillRect(0, 0, 96, 60);
-  x.fillStyle = '#ffd36b'; x.beginPath(); x.arc(66, 40, 13, 0, Math.PI * 2); x.fill();
-  x.fillStyle = '#3f7a3a'; x.beginPath(); x.moveTo(0, 62); x.quadraticCurveTo(30, 40, 60, 60); x.quadraticCurveTo(80, 52, 96, 58); x.lineTo(96, 96); x.lineTo(0, 96); x.fill();
-  x.fillStyle = '#2b5d8a'; x.fillRect(0, 74, 96, 22);
-  x.fillStyle = '#d9483b'; x.fillRect(16, 52, 18, 16); x.fillStyle = '#f4f1ea'; x.fillRect(19, 56, 5, 5);
-  x.fillStyle = 'rgba(255,255,255,.35)'; x.fillRect(0, 80, 96, 2);
+  const hue = x.createLinearGradient(0, 0, N, 0);
+  ['#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#00c7be', '#007aff', '#af52de', '#ff2d55'].forEach((col, i, arr) => hue.addColorStop(i / (arr.length - 1), col));
+  x.fillStyle = hue; x.fillRect(0, 0, N, N);
+  const light = x.createLinearGradient(0, 0, 0, N);
+  light.addColorStop(0, 'rgba(255,255,255,.85)'); light.addColorStop(0.32, 'rgba(255,255,255,0)');
+  light.addColorStop(0.62, 'rgba(0,0,0,0)'); light.addColorStop(1, 'rgba(0,0,0,.85)');
+  x.fillStyle = light; x.fillRect(0, 0, N, N);
   return c;
 }
 
@@ -796,7 +816,7 @@ function buildFilterUI() {
     const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(base, 0, 0);
     try { applyFilter(x, 96, 96, fx, 1); } catch (e) { /* mantém a cena original */ }
     const ft = el.querySelector('.ft');
-    ft.style.backgroundImage = `url(${c.toDataURL('image/jpeg', .85)})`;
+    ft.style.backgroundImage = `url(${c.toDataURL('image/png')})`;
     ft.classList.add('has-thumb');
   });
 }

@@ -73,7 +73,7 @@
     const t = text
       .replace(/\b(https?)\s*[:;]\s*\/\s*\/\s*/gi, '$1://')   /* "https : //" */
       /* "www" lido errado ("were", "vww", "ww", "wvw") antes de "palavra com" */
-      .replace(/(^|[^a-z0-9])(?:were|(?=[a-z]*w)(?=[a-z]*[wv][a-z]*[wv])[wve]{2,5})\s*[.,:;]?\s+(?=[a-z0-9-]{3,}\s*[.,]?\s*(?:com|con|c0m|corn|net|org)(?:\s*[.,]?\s*br)?[|\])!.]*\s*(?:$|\n))/gim, '$1www.')
+      .replace(/(^|[^a-z0-9])(?:w[a-z]{0,3}|(?=[a-z]*w)(?=[a-z]*[wv][a-z]*[wv])[wve]{2,5})\s*[.,:;]?\s+(?=[a-z0-9-]{3,}\s*[.,]?\s*(?:com|con|c0m|corn|net|org)(?:\s*[.,]?\s*br)?[|\])!.]*\s*(?:$|\n))/gim, '$1www.')
       .replace(/\b(?:[wvm]\s*[wv]\s*[wv]|[wv]\s*[wvm]\s*[wv]|[wv]\s*[wv]\s*[wvm])\s*[.,:;]\s*(?=[a-z0-9])/gi, 'www.')
       /* ponto perdido depois de "www.": "www.youtube con" → "www.youtube.con" */
       .replace(/\b(www\.[a-z0-9-]{2,})\s*[,;:]?\s+(com|con|corn|c0m|cam|net|org|gov|edu|io|app|dev)\b/gi, '$1.$2')
@@ -167,17 +167,36 @@
 
   /* OCR: Worker quando possível; na abertura via file:// (Workers bloqueados)
      usa a mesma biblioteca na thread principal, só sob demanda. */
+  /* Pool de leitores de OCR (Workers). Em aparelhos com 6+ núcleos usa 2
+     leitores em paralelo — o dobro de leituras por segundo. */
   const OCR = {
-    worker: null, failed: false, inline: null, seq: 0, pending: new Map(),
+    workers: [], failed: false, inline: null, seq: 0, pending: new Map(),
+    size: Math.max(1, Math.min(2, ((root.navigator && navigator.hardwareConcurrency) || 2) >= 6 ? 2 : 1)),
     canWorker() { return !this.failed && /^https?:$/.test(location.protocol) && 'Worker' in root; },
+    spawn() {
+      const w = new Worker('js/links/ocr-worker.js?v=20261022b');
+      w.busy = 0;
+      w.onmessage = e => { w.busy = Math.max(0, w.busy - 1); const p = this.pending.get(e.data.id); if (!p) return; this.pending.delete(e.data.id); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); };
+      w.onerror = e => { console.warn('OCR worker:', e.message); this.failed = true; this.pending.forEach(p => p.reject(new Error('OCR indisponível'))); this.pending.clear(); this.workers = []; };
+      return w;
+    },
     ensureWorker() {
-      if (this.worker || !this.canWorker()) return this.worker;
-      try {
-        this.worker = new Worker('js/links/ocr-worker.js?v=20261021d');
-        this.worker.onmessage = e => { const p = this.pending.get(e.data.id); if (!p) return; this.pending.delete(e.data.id); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); };
-        this.worker.onerror = e => { console.warn('OCR worker:', e.message); this.failed = true; this.pending.forEach(p => p.reject(new Error('OCR indisponível'))); this.pending.clear(); this.worker = null; };
-      } catch (e) { this.failed = true; this.worker = null; }
-      return this.worker;
+      if (!this.canWorker()) return null;
+      try { while (this.workers.length < this.size) this.workers.push(this.spawn()); }
+      catch (e) { this.failed = true; this.workers = []; return null; }
+      return this.workers.slice().sort((a, b) => a.busy - b.busy)[0];
+    },
+    free() { return this.workers.filter(w => !w.busy).length || (this.workers.length ? 0 : this.size); },
+    /* pré-carrega o OCR (~0,6 s) enquanto o usuário ainda está na tela inicial */
+    warm() {
+      if (this.warmed || !this.canWorker()) return; this.warmed = true;
+      /* aquece com um texto de verdade (a 1ª leitura real fica ~2x mais rápida) */
+      const c = document.createElement('canvas'); c.width = 420; c.height = 64;
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 420, 64);
+      x.fillStyle = '#111'; x.font = '32px Arial, sans-serif'; x.fillText('www.exemplo.com.br', 12, 44);
+      const d = x.getImageData(0, 0, 420, 64).data;
+      const pgm = toPGM(grayFromRGBA(d, 420 * 64), 420, 64);
+      for (let i = 0; i < this.size; i++) this.recognize(pgm.slice(), true).then(() => this.recognize(pgm.slice(), true)).catch(() => {});
     },
     async inlineEngine() {
       if (this.inline) return this.inline;
@@ -194,9 +213,11 @@
       return this.inline;
     },
     async recognize(png, tsv) {
-      if (this.ensureWorker()) {
+      const w = this.ensureWorker();
+      if (w) {
         const id = ++this.seq;
-        return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, png, tsv: !!tsv }, [png.buffer]); });
+        w.busy++;
+        return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); w.postMessage({ id, png, tsv: !!tsv }, [png.buffer]); });
       }
       const { T, api } = await this.inlineEngine();
       T.FS.writeFile('/input', png); api.SetImageFile();
@@ -206,6 +227,16 @@
     },
     busy() { return this.pending.size > 0; }
   };
+
+  /* PGM (cinza, sem compressão): montado em ~1 ms — bem mais rápido que
+     codificar PNG a cada leitura; o Tesseract lê direto. */
+  function toPGM(gray, w, h) {
+    const hdr = new TextEncoder().encode('P5\n' + w + ' ' + h + '\n255\n');
+    const out = new Uint8Array(hdr.length + w * h);
+    out.set(hdr); out.set(gray, hdr.length);
+    return out;
+  }
+  function grayFromRGBA(d, n) { const g = new Uint8Array(n); for (let i = 0, j = 0; j < n; i += 4, j++) g[j] = d[i]; return g; }
 
   /* Prepara imagem para OCR: tons de cinza com contraste normalizado */
   async function ocrPng(srcCanvas, sx, sy, sw, sh, maxW) {
@@ -222,9 +253,7 @@
     acc = 0; while (hi > 0 && (acc += hist[hi]) < n * 0.01) hi--;
     const k = 255 / Math.max(16, hi - lo);
     for (let i = 0; i < d.length; i += 4) { const g = Math.max(0, Math.min(255, (d[i] - lo) * k)); d[i] = d[i + 1] = d[i + 2] = g; d[i + 3] = 255; }
-    x.putImageData(id, 0, 0);
-    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
-    return new Uint8Array(await blob.arrayBuffer());
+    return toPGM(grayFromRGBA(d, w * h), w, h);
   }
 
   /* ───────── Localizador de linhas de texto (estilo "Texto ao Vivo") ─────────
@@ -291,7 +320,7 @@
   async function ocrRegions(src, vw, vh, regions) {
     if (!regions.length) return { links: [], text: '' };
     const segs = [];
-    const TARGET = 44, MAXW = 1600, GAP = 24;
+    const TARGET = 40, MAXW = 1400, GAP = 18;
     let y = GAP, maxW = 0;
     for (const r of regions) {
       const pad = r.h * 0.6;
@@ -330,9 +359,11 @@
       }
       x.putImageData(id, s0.dx, s0.dy);
     }
-    const blob = await new Promise(r => c.toBlob(r, 'image/png'));
-    const r = await OCR.recognize(new Uint8Array(await blob.arrayBuffer()), true);
-    return parseTsvLinks(r.tsv || '', segs);
+    const all = x.getImageData(0, 0, c.width, c.height).data;
+    const r = await OCR.recognize(toPGM(grayFromRGBA(all, c.width * c.height), c.width, c.height), true);
+    const out = parseTsvLinks(r.tsv || '', segs);
+    out.n = segs.length;
+    return out;
   }
 
   function parseTsvLinks(tsv, segs) {
@@ -361,7 +392,7 @@
         const seg = segs.find(s0 => (y0 + y1) / 2 >= s0.dy - 12 && (y0 + y1) / 2 <= s0.dy + s0.sh + 12) || segs[0];
         const box = [seg.fx + (x0 - seg.dx) / seg.scale, seg.fy + (y0 - seg.dy) / seg.scale, (x1 - x0) / seg.scale, (y1 - y0) / seg.scale];
         const label = ws.map(w => w.t).join(' ');
-        out.push({ url, box, label, conf: Math.min(...ws.map(w => w.conf)), explicit: /^(https?:|www\.)/i.test(label.trim()) });
+        out.push({ url, box, label, conf: Math.min(...ws.map(w => w.conf)), explicit: /^(https?:|www\.)/i.test(label.replace(/\s+/g, '')) });
       }
     }
     return { links: out, text: all.join('\n') };
@@ -448,25 +479,27 @@
 
     /* Links escritos: linhas de texto localizadas + leitura ampliada (rápida
        para texto pequeno); a cada 3 leituras, também o quadro inteiro. */
-    if (!L.ocrRunning && OCR.canWorker() && now - L.lastOcr > 450 && !found.length) {
-      L.ocrRunning = true; L.lastOcr = now;
+    if ((L.ocrJobs || 0) < OCR.size && OCR.canWorker() && now - L.lastOcr > (L.ocrJobs ? 120 : 60) && !found.length) {
+      L.ocrJobs = (L.ocrJobs || 0) + 1; L.ocrRunning = true; L.lastOcr = now;
       L.ocrTurn = (L.ocrTurn || 0) + 1;
+      const tJob = performance.now();
       const job = (async () => {
-        if (L.ocrTurn % 3 === 0) {
+        if (L.ocrTurn % 5 === 0) {
           const png = await ocrPng(video, vis.x, vis.y, vis.w, vis.h, 1280);
           const r = await OCR.recognize(png);
-          return { text: r.text, links: extractLinks(r.text).map(url => ({ url, box: null, label: url, explicit: /^(https?:|www\.)/i.test(url.replace(/^https:\/\/(?=www\.)/, '')) })) };
+          return { text: r.text, links: extractLinks(r.text).map(url => ({ url, box: null, label: url, explicit: false, conf: null })) };
         }
         /* só o texto que aparece na tela (como a câmera do iPhone) */
         const mx = vis.w * 0.03, my = vis.h * 0.03;
+        /* texto cortado pela borda da tela fica de fora (geraria domínio incompleto) */
         const regs = findTextRegions(video, vw, vh, 24).filter(r => {
-          const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
-          return cx > vis.x - mx && cx < vis.x + vis.w + mx && cy > vis.y - my && cy < vis.y + vis.h + my;
-        }).slice(0, 10);
+          const cy = r.y + r.h / 2;
+          return r.x >= vis.x + 2 && r.x + r.w <= vis.x + vis.w - 2 && cy > vis.y - my && cy < vis.y + vis.h + my;
+        }).slice(0, 6);
         return ocrRegions(video, vw, vh, regs);
       })();
       job.then(res => {
-        if (DEBUG) console.info('[links] OCR', L.ocrTurn % 3 === 0 ? '(quadro)' : '(regiões)', JSON.stringify(res.text || ''), res.links.map(l => l.url));
+        if (DEBUG) console.info('[links] OCR', Math.round(performance.now() - tJob) + 'ms', L.ocrTurn % 5 === 0 ? '(quadro)' : '(regiões ' + (res.n || 0) + ')', JSON.stringify(res.text || ''), res.links.map(l => l.url));
         if (!L.enabled || !shouldScan()) return;
         L.ocrOk = true;
         onTextLinks(res.links, performance.now());
@@ -474,9 +507,9 @@
         console.warn('OCR:', e.message);
         L.ocrErr = (L.ocrErr || 0) + 1;
         if (L.ocrErr >= 2 || OCR.failed) { OCR.failed = true; setStatus('🔗 QR ativo · links escritos: leitura de texto indisponível neste aparelho (use 📸 foto)', 'warn'); }
-      }).finally(() => { L.ocrRunning = false; });
+      }).finally(() => { L.ocrJobs = Math.max(0, L.ocrJobs - 1); L.ocrRunning = L.ocrJobs > 0; });
     }
-    schedule(found.length ? 350 : 260);
+    schedule(found.length ? 350 : 140);
   }
 
   /* Link de texto reconhecido: marca com cantoneiras amarelas, mostra o selo
@@ -495,7 +528,10 @@
   /* Leituras do mesmo link com pequenos erros do OCR ("gslene-demo",
      "mww.gsiens-demo") são agrupadas; abre UMA vez, com a versão mais lida. */
   function clusterFor(hostName) {
-    for (const c of L.clusters) for (const h0 of c.hosts) if (h0 === hostName || (Math.min(h0.length, hostName.length) > 5 && lev(h0, hostName) <= 2)) return c;
+    for (const c of L.clusters) for (const h0 of c.hosts) {
+      if (h0 === hostName) return c;
+      if (Math.min(h0.length, hostName.length) > 5 && (lev(h0, hostName) <= 2 || h0.startsWith(hostName + '.') || hostName.startsWith(h0 + '.'))) return c;
+    }
     const c = { hosts: new Set(), variants: new Map(), n: 0, last: 0, opened: false };
     L.clusters.push(c);
     return c;
@@ -520,13 +556,17 @@
       showChip(host(url), url, url.replace(/^https?:\/\//, '').replace(/\/$/, ''));
       /* parte de um domínio maior já visto ("demo.com.br" de "gslens-demo.com.br") */
       const partial = L.clusters.some(o => o !== c && Array.from(o.hosts).some(h0 => h0.endsWith('-' + hostName) || h0.endsWith('.' + hostName)));
-      if (!partial && !c.opened && (c.n >= 2 || lk.explicit)) {
+      /* 1ª leitura só abre se começar com www./http E o OCR estiver confiante
+         em todas as palavras; senão espera confirmação por uma 2ª leitura */
+      const sure = lk.explicit && lk.conf != null && lk.conf >= 70;
+      if (DEBUG) console.info('[links] candidato', lk.url, 'conf', lk.conf, 'leituras', c.n, sure ? '(confiante)' : '');
+      if (!partial && !c.opened && (c.n >= 2 || sure)) {
         c.opened = true;
         setTimeout(() => {          /* deixa ver a marcação; usa a melhor leitura até aqui */
           if (!L.enabled || !shouldScan()) { c.opened = false; return; }
           if (navigator.vibrate) try { navigator.vibrate(30); } catch (e) { }
           open({ kind: 'url', url: bestUrl(c), raw: bestUrl(c) }, 'Link escrito');
-        }, 650);
+        }, 150);
       }
     }
     if (!links.length && L.textBox && t - L.textBox.t > 1500) { L.textBox = null; clearOverlay(); hideChip(); }
@@ -757,7 +797,14 @@
     root.GSApp.toast(L.enabled ? '🔗 Leitor de QR Code e links ATIVADO' : 'Leitor de QR Code e links desativado');
     if (L.enabled) schedule(100); else { clearTimeout(L.timer); L.timer = null; clearOverlay(); }
   }
-  function start() { loadPref(); updateToggle(); if (L.enabled) schedule(500); }
+  function start() {
+    loadPref(); updateToggle();
+    if (L.enabled) {
+      schedule(300);
+      /* aquece o OCR logo após a tela inicial aparecer */
+      setTimeout(() => OCR.warm(), 400);
+    }
+  }
   function onVisibility() { if (!document.hidden && L.enabled && !L.timer) schedule(300); }
 
   /* ───────── Leitura de uma foto da galeria ───────── */
@@ -814,7 +861,7 @@
 
   root.LinkScan = {
     start, toggle, close, scanCapture, chipTap, togglePreview, _findTextRegions: findTextRegions, _ocrRegions: ocrRegions, reload, openExternal, copyUrl, share, open, openUrl, scanImage,
-    parseContent, extractLinks, normalizeUrl, wake: () => { if (L.enabled && !L.timer) schedule(200); updateToggle(); },
+    parseContent, extractLinks, normalizeUrl, wake: () => { if (L.enabled) schedule(0); updateToggle(); },
     get enabled() { return L.enabled; }, _state: L, _ocr: OCR
   };
 })(window);
