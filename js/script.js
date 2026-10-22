@@ -252,6 +252,8 @@ window.addEventListener('DOMContentLoaded', async () => {
      temporizador OFF) — antes os botões apareciam desmarcados. */
   document.getElementById('afBtn').classList.toggle('active', afEnabled);
   document.getElementById('ts0').classList.add('active');
+  try { buildFilterUI(); buildFrameUI(); } catch (e) { console.error('Filtros/molduras:', e); }
+  if (window.LinkScan) LinkScan.start();
   try {
     await initDB();
     const saved = await loadPhotosFromDB();
@@ -274,6 +276,7 @@ function onKeyDown(e) {
   if (e.key !== 'Escape') return;
   const help = document.getElementById('scanHelpModal');
   if (help && !help.classList.contains('hidden')) { Scan3D.hideHelp(); return; }
+  if (!document.getElementById('webSheet').classList.contains('hidden')) return;   /* tratado pelo leitor de links */
   if (!document.getElementById('batchModal').classList.contains('hidden')) { closeBatchModal(); return; }
   if (!document.getElementById('editModal').classList.contains('hidden')) closeModal();
 }
@@ -361,7 +364,7 @@ async function initCamera() {
     applyVideoTransform();
     /* o visor só ganha tamanho depois que a tela aparece */
     requestAnimationFrame(resizeFxCanvas);
-    video.style.filter = CSS_FILTER_PREVIEW[currentFilter] || 'none';
+    applyLivePreview(currentFilter);
     applyContinuousAF();
     if (flashEnabled) applyTorch(true);
     if (zoomLevel !== 1) setZoom(zoomLevel);
@@ -369,6 +372,7 @@ async function initCamera() {
     toast(hasAudio ? t('cameraReady') : '📷 Câmera pronta (sem microfone — vídeos sem áudio)');
     if (currentMode === 'ar' && window.Scan3D) Scan3D.enter();
     if (currentMode === 'efeitos') startFx(currentFx);
+    if (window.LinkScan) LinkScan.wake();
   } catch(e) {
     console.error('Câmera:', e);
     stopStream();
@@ -396,6 +400,7 @@ function goHome() {
 }
 
 function stopStream() {
+  if (window.GSFilters) GSFilters.stopPreview();
   if (stream) { stream.getTracks().forEach(tr => tr.stop()); stream = null; }
   const v = document.getElementById('video');
   if (v) v.srcObject = null;
@@ -421,6 +426,7 @@ async function flipCamera() {
   try { await v.play(); } catch (e) { /* autoplay já liberado pelo gesto */ }
   detectFacing();
   applyVideoTransform();
+  applyLivePreview(currentFilter);
   applyContinuousAF();
   if (flashEnabled) applyTorch(true);
   if (zoomLevel !== 1) setZoom(zoomLevel);
@@ -434,6 +440,8 @@ function applyVideoTransform() {
   const v = document.getElementById('video');
   const z = hwZoom ? 1 : zoomLevel;
   v.style.transform = `scaleX(${useFront ? -1 : 1})` + (z !== 1 ? ` scale(${z})` : '');
+  const fc = document.getElementById('filterCanvas');
+  if (fc) fc.style.transform = v.style.transform;
 }
 
 /* Mapeamento pixel-do-vídeo → pixel-do-visor (object-fit: cover, espelho, zoom
@@ -466,6 +474,7 @@ function showScreen(id) {
   window.scrollTo(0, 0);
 }
 function returnToCamera() {
+  if (window.LinkScan) setTimeout(() => LinkScan.wake(), 50);
   if (stream) showScreen('cameraScreen');
   else { hideAllScreens(); document.getElementById('homeScreen').style.display = ''; }
 }
@@ -712,13 +721,106 @@ function setFilter(fx, el) {
   currentFilter = fx;
   document.querySelectorAll('.fi').forEach(f => f.classList.remove('active'));
   if (el) el.classList.add('active');
+  applyLivePreview(fx);
+  toast(t('filterApplied') + filterName(fx));
+}
+
+/* Prévia do filtro na câmera: CSS para os filtros originais; WebGL
+   (resultado idêntico ao da foto) para os clássicos/modernos. */
+function applyLivePreview(fx) {
   const video = document.getElementById('video');
-  if (video) video.style.filter = CSS_FILTER_PREVIEW[fx] || 'none';
-  toast(t('filterApplied') + (el ? el.querySelector('span').textContent : fx));
+  if (!video) return;
+  if (window.GSFilters && GSFilters.has(fx)) {
+    const ok = stream && GSFilters.startPreview(document.getElementById('filterCanvas'), video, fx);
+    video.style.filter = ok ? 'none' : GSFilters.cssFallback(fx);
+  } else {
+    if (window.GSFilters) GSFilters.stopPreview();
+    video.style.filter = CSS_FILTER_PREVIEW[fx] || 'none';
+  }
+}
+
+function filterName(fx) {
+  if (fx === 'none') return 'Normal';
+  if (window.GSFilters && GSFilters.has(fx)) return GSFilters.get(fx).name;
+  const el = document.querySelector(`.fi[data-f="${fx}"] span`);
+  return el ? el.textContent : fx;
+}
+
+/* Miniaturas dos filtros: uma cena de exemplo processada pelo próprio
+   filtro (antes eram quadrados cinza com CSS, quase iguais entre si). */
+function sampleThumbCanvas() {
+  const c = document.createElement('canvas'); c.width = c.height = 96;
+  const x = c.getContext('2d', { willReadFrequently: true });
+  const sky = x.createLinearGradient(0, 0, 0, 60); sky.addColorStop(0, '#3d7fd9'); sky.addColorStop(1, '#f2b880');
+  x.fillStyle = sky; x.fillRect(0, 0, 96, 60);
+  x.fillStyle = '#ffd36b'; x.beginPath(); x.arc(66, 40, 13, 0, Math.PI * 2); x.fill();
+  x.fillStyle = '#3f7a3a'; x.beginPath(); x.moveTo(0, 62); x.quadraticCurveTo(30, 40, 60, 60); x.quadraticCurveTo(80, 52, 96, 58); x.lineTo(96, 96); x.lineTo(0, 96); x.fill();
+  x.fillStyle = '#2b5d8a'; x.fillRect(0, 74, 96, 22);
+  x.fillStyle = '#d9483b'; x.fillRect(16, 52, 18, 16); x.fillStyle = '#f4f1ea'; x.fillRect(19, 56, 5, 5);
+  x.fillStyle = 'rgba(255,255,255,.35)'; x.fillRect(0, 80, 96, 2);
+  return c;
+}
+
+function buildFilterUI() {
+  const strip = document.getElementById('filtersInner');
+  if (window.GSFilters && strip && !strip.dataset.built) {
+    strip.dataset.built = '1';
+    const groups = [['classic', 'Clássicos'], ['modern', 'Modernos']];
+    for (const [g, label] of groups) {
+      const h = document.createElement('div'); h.className = 'fi-group'; h.textContent = label; h.setAttribute('aria-hidden', 'true');
+      strip.appendChild(h);
+      for (const d of GSFilters.DEFS.filter(f => f.group === g)) {
+        const el = document.createElement('div');
+        el.className = 'fi'; el.dataset.f = d.id; el.setAttribute('role', 'button'); el.tabIndex = 0;
+        el.innerHTML = '<div class="ft"></div><span></span>';
+        el.querySelector('span').textContent = d.name;
+        el.onclick = () => setFilter(d.id, el);
+        el.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setFilter(d.id, el); } };
+        strip.appendChild(el);
+      }
+    }
+    /* mesmos filtros na aba Efeitos do editor */
+    const grid = document.querySelector('#panelEffects .fx-grid');
+    for (const [g, label] of groups) {
+      const h = document.createElement('div'); h.className = 'grid-group'; h.textContent = label; grid.appendChild(h);
+      for (const d of GSFilters.DEFS.filter(f => f.group === g)) {
+        const b = document.createElement('button'); b.className = 'btn fxchip'; b.dataset.e = d.id; b.textContent = d.name;
+        b.onclick = () => applyEffect(d.id, b); grid.appendChild(b);
+      }
+    }
+  }
+  /* miniaturas reais para todos os filtros (originais + novos) */
+  const base = sampleThumbCanvas();
+  document.querySelectorAll('.fi').forEach(el => {
+    const fx = el.dataset.f, c = document.createElement('canvas'); c.width = c.height = 96;
+    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(base, 0, 0);
+    try { applyFilter(x, 96, 96, fx, 1); } catch (e) { /* mantém a cena original */ }
+    const ft = el.querySelector('.ft');
+    ft.style.backgroundImage = `url(${c.toDataURL('image/jpeg', .85)})`;
+    ft.classList.add('has-thumb');
+  });
+}
+
+function buildFrameUI() {
+  if (!window.GSFrames) return;
+  const grid = document.querySelector('#panelFrame .frame-grid');
+  if (!grid || grid.dataset.built) return;
+  grid.dataset.built = '1';
+  const first = document.createElement('div'); first.className = 'grid-group'; first.textContent = 'Básicas';
+  grid.insertBefore(first, grid.firstChild);
+  for (const [g, label] of [['classic', 'Clássicas'], ['modern', 'Modernas']]) {
+    const h = document.createElement('div'); h.className = 'grid-group'; h.textContent = label; grid.appendChild(h);
+    for (const f of GSFrames.LIST.filter(x => x.group === g)) {
+      const b = document.createElement('button'); b.className = 'btn frame-btn'; b.dataset.frame = f.id; b.textContent = f.name;
+      b.onclick = () => applyFrame(f.id, b); grid.appendChild(b);
+    }
+  }
 }
 
 function applyFilter(ctx, w, h, fx, alpha) {
   if (fx === 'none' || !alpha) return;
+  /* filtros clássicos/modernos: mesmo modelo da prévia WebGL (js/filters.js) */
+  if (window.GSFilters && GSFilters.has(fx)) { GSFilters.apply(ctx, w, h, fx, alpha); return; }
   const id = ctx.getImageData(0, 0, w, h);
   const d  = id.data;
   for (let i = 0; i < d.length; i += 4) {
@@ -784,6 +886,7 @@ function setMode(mode) {
 
   document.querySelector('.shutter').classList.remove('recording');
   updateAFBadge();
+  if (window.LinkScan) LinkScan.wake();
   const msgs = {
     ar:'🔮 AR · Scanner 3D', efeitos:'✨ Efeitos ao vivo', noite:'🌙 Modo Noite', retrato:'🤳 Modo Retrato',
     video:'🎬 Toque para gravar', slowmo:'🐌 Slow Motion — Toque para gravar', foto:'📷 Modo Foto'
@@ -1113,7 +1216,7 @@ function renderGallery() {
 
     const ov=document.createElement('div');
     ov.className='gal-cell-overlay';
-    ov.textContent=(isVideo?'🎬 ':'')+(MODE_NAMES[p.mode]||'')+(p.filter&&p.filter!=='none'?' · '+p.filter:'');
+    ov.textContent=(isVideo?'🎬 ':'')+(MODE_NAMES[p.mode]||'')+(p.filter&&p.filter!=='none'?' · '+filterName(p.filter):'');
 
     const check=document.createElement('div');
     check.className='gal-cell-check';
@@ -1525,6 +1628,11 @@ function applyFrame(frame,el) {
 /* CORREÇÃO: a moldura "Filme" desenhava os furos e DEPOIS pintava o fundo
    por cima (furos invisíveis); "Sombra" desenhava a foto duas vezes. */
 function renderFrame(src,frame){
+  if(window.GSFrames && GSFrames.has(frame)){
+    const p=photos[editingIdx];
+    const out=GSFrames.render(src,frame,{date:p?p.id:Date.now()});
+    if(out) return out;
+  }
   const iw=src.width,ih=src.height;
   const canvas=document.createElement('canvas');
   const pad=frame==='polaroid'?Math.round(iw*.08):Math.round(iw*.04);
@@ -1832,6 +1940,20 @@ async function aiRemoveBg() {
   showAIResult('Clareando o fundo (limiar adaptativo pelas bordas)...');
   await applyEffect('whitebg',document.querySelector('.fxchip[data-e="whitebg"]'));
   showAIResult('⬜ Fundo claro convertido em branco puro, preservando o conteúdo escuro. Ideal para documentos e objetos sobre fundo claro (processamento local, sem envio da foto).');
+}
+
+/* Lê QR Code ou link impresso numa foto da galeria e abre no mini navegador */
+async function aiScanLinks() {
+  const p=photos[editingIdx];if(!p||p.type==='video')return;
+  if(!window.LinkScan){showAIResult('⚠️ Leitor de links indisponível.');return;}
+  try {
+    const img=await loadImage(p.dataUrl);
+    const r=await LinkScan.scanImage(img,msg=>showAIResult('🔎 '+msg));
+    if(!r.parsed){showAIResult('Nenhum QR Code ou link encontrado nesta foto.'+(r.text&&r.text.trim()?' Texto lido: "'+r.text.trim().slice(0,140)+'"':''));return;}
+    const extra=r.all&&r.all.length>1?' (outros: '+r.all.slice(1).join(', ')+')':'';
+    showAIResult('🔗 '+r.source+' encontrado'+(r.parsed.url?': '+r.parsed.url:'')+extra);
+    LinkScan.open(r.parsed,r.source);
+  } catch(e){ console.error(e); showAIResult('⚠️ '+(e.message||'Falha na leitura')); }
 }
 
 function showAIResult(msg){

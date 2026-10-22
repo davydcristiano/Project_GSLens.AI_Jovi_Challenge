@@ -1,4 +1,4 @@
-Projeto GSLeans.AI - CHALLENGE JOVI
+Projeto GSLens.AI - CHALLENGE JOVI
 ===
 
 Projeto do Challenge realizado em parceria com a JOVI durante a graduação na FIAP. Atuação em equipe no desenvolvimento de uma aplicação web multiplataforma com integração à câmera de dispositivos móveis.
@@ -6,7 +6,7 @@ Projeto do Challenge realizado em parceria com a JOVI durante a graduação na F
 ## Informação
 <br>
 
-- Title:  `GSLeans.AI`
+- Title:  `GSLens.AI`
 - Authors:  `Davyd Cristiano`, `Davi Sena`, `Christian Urbano`, `Thaylla Ohani`, `André Bettencourt`
 - Full-preprint:
 - <img src="assets/image-project.png" width="100%">
@@ -40,6 +40,22 @@ Para testar no celular, publique em HTTPS (ex.: GitHub Pages) — em `http://IP-
 - **Efeitos** — efeitos visuais ao vivo (Grade, Partículas, Neon, Bokeh, Matrix, Corações, Estrelas, Chuva, Confetti). Antes ficavam dentro da aba AR.
 - **AR · Scanner 3D** — escaneamento real de objetos físicos e geração de modelo 3D.
 
+## Leitor de QR Code e links
+
+Com a câmera aberta (qualquer aba, exceto AR), o app procura continuamente:
+
+- **QR Codes** — `BarcodeDetector` nativo do navegador quando existe, ou jsQR (funciona em qualquer navegador).
+- **Links impressos** (ex.: `www.site.com.br/promo`) — OCR local (Tesseract em WebAssembly, rodando num Worker). Para evitar falsos positivos, o link precisa ser lido em duas leituras seguidas.
+
+Ao detectar um link, ele abre num **mini navegador dentro do app** (com Recarregar, Abrir fora, Copiar e Compartilhar). QR Codes que não são links (Wi-Fi, contato, e-mail, telefone, SMS, localização, texto) abrem um cartão com as ações adequadas. O botão de QR na barra superior liga/desliga o leitor. No editor, a aba **🤖 Auto → 🔗 Ler QR / Link** faz a leitura numa foto da galeria.
+
+Limitações: muitos sites (Google, bancos, redes sociais) proíbem ser exibidos dentro de outros apps (cabeçalhos `X-Frame-Options`/CSP); nesses casos a página fica em branco e o botão **↗ Abrir fora** abre no navegador. A leitura de links impressos reconhece texto em alfabeto latino e precisa do app servido por http(s) (abrindo o `index.html` direto do disco, só o QR Code funciona ao vivo).
+
+## Filtros e molduras
+
+- **Filtros**: além dos 13 originais, 9 **clássicos** (Kodachrome, Polaroid, Anos 70, Lomo, Technicolor, Cross Process, P&B Ilford, Cianotipia, Vintage) e 10 **modernos** (Teal & Orange, Cyberpunk, Vaporwave, Moody, Clarendon, Juno, Lark, Golden Hour, Matte, Neon Noir). Prévia ao vivo em WebGL idêntica ao resultado da foto; também disponíveis na aba Efeitos do editor.
+- **Molduras**: além das 8 básicas, 6 **clássicas** (Madeira, Passe-partout, Ornamentada, Serrilhada, Slide 35mm, Antiga) e 7 **modernas** (Neon, Gradiente, Vidro, Story 9:16, Fita adesiva, Cinema, Galeria), todas desenhadas por código em qualquer resolução.
+
 ## Scanner 3D (aba AR)
 
 1. Toque em **🖨️ Prancha A4** e imprima em tamanho real (100%, sem "ajustar à página"). Confira a barra de 50 mm.
@@ -66,6 +82,6 @@ Limitações do método: concavidades profundas e topos planos tendem a ficar ar
 
 ## Direitos Reservados
 ```
-Title: GSLeans.AI
+Title: GSLens.AI
 Authors: Davyd Cristiano, Davi Sena, Christian Urbano, Thaylla Ohani, André Bettencourt.
 ```
