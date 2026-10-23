@@ -1,0 +1,76 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Teste do modelo de retrato</title></head><body>
+<script src="../../js/portrait/tflite.js"></script>
+<script src="../../js/portrait/portrait.js"></script>
+<script src="../fixtures/decode.js"></script>
+<script>
+/* Compara a máscara do nosso executor com a do MediaPipe oficial.
+   O vídeo de demonstração do MediaPipe já é a SAÍDA do MediaPipe: a pessoa
+   recortada sobre uma foto de fundo fixa. Logo:
+   • pixel igual à foto de fundo  → o MediaPipe disse "fundo";
+   • pixel muito diferente dela   → o MediaPipe disse "pessoa".
+   A foto de fundo é a mediana temporal de cada pixel; só entram na avaliação
+   pixels que são fundo na maior parte do tempo (onde a mediana é confiável). */
+(async () => {
+  const out = {};
+  try {
+    const W = 256, H = 144;
+    const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d', { willReadFrequently: true });
+    const big = document.createElement('canvas'); big.width = 640; big.height = 360; const bx = big.getContext('2d', { willReadFrequently: true });
+    const frames = [], bigFrames = [];
+    await decodeFrames('../fixtures/media/selfie_mediapipe.webm', (v, i) => {
+      if (i % 5) return;
+      x.drawImage(v, 0, 0, W, H); frames.push(x.getImageData(0, 0, W, H).data.slice());
+      bx.drawImage(v, 0, 0); bigFrames.push(bx.getImageData(0, 0, 640, 360));
+    });
+    /* foto de fundo = mediana por pixel */
+    const F = frames.length, plate = new Float32Array(W * H * 3), tmp = new Float32Array(F);
+    for (let p = 0; p < W * H; p++) for (let ch = 0; ch < 3; ch++) { for (let k = 0; k < F; k++) tmp[k] = frames[k][p * 4 + ch]; tmp.sort(); plate[p * 3 + ch] = tmp[F >> 1]; }
+    const diff = (f, p) => Math.abs(f[p * 4] - plate[p * 3]) + Math.abs(f[p * 4 + 1] - plate[p * 3 + 1]) + Math.abs(f[p * 4 + 2] - plate[p * 3 + 2]);
+    /* envoltória da pessoa: todo pixel que em algum quadro difere muito da
+       foto de fundo; preenchida linha a linha (entre o ponto mais à esquerda e
+       o mais à direita) e dilatada — cobre também o tronco parado, onde a
+       mediana coincide com a própria pessoa e não serve como fundo */
+    /* fração do tempo em que o pixel mostra a foto de fundo (mediana confiável se ≥ 60%) */
+    const bgShare = new Float32Array(W * H);
+    for (const f of frames) for (let p = 0; p < W * H; p++) if (diff(f, p) < 18) bgShare[p] += 1 / frames.length;
+    const ever = new Uint8Array(W * H);
+    for (const f of frames) for (let p = 0; p < W * H; p++) if (diff(f, p) > 60) ever[p] = 1;
+    const env = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+      let l = -1, r = -1;
+      for (let xx = 0; xx < W; xx++) if (ever[y * W + xx]) { if (l < 0) l = xx; r = xx; }
+      if (l >= 0) for (let xx = l; xx <= r; xx++) env[y * W + xx] = 1;
+    }
+    const D = 6, envD = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) for (let xx = 0; xx < W; xx++) if (env[y * W + xx])
+      for (let dy = -D; dy <= D; dy++) for (let dx = -D; dx <= D; dx++) { const yy = y + dy, x2 = xx + dx; if (yy >= 0 && yy < H && x2 >= 0 && x2 < W) envD[yy * W + x2] = 1; }
+    /* nossa segmentação em quadros espaçados */
+    let bgN = 0, bgFP = 0, pN = 0, pTP = 0, pAll = 0, pAllTP = 0, ms = [];
+    for (let k = 0; k < F; k += 3) {
+      const bf = document.createElement('canvas'); bf.width = 640; bf.height = 360; bf.getContext('2d').putImageData(bigFrames[k], 0, 0);
+      const r = await GSPortrait.segment(bf, 640, 360);
+      ms.push(r.ms);
+      for (let p = 0; p < W * H; p++) {
+        const d = diff(frames[k], p), m = r.mask[p];
+        if (!envD[p] && d < 10) { bgN++; if (m > 0.5) { bgFP++; (window.__fp || (window.__fp = new Uint16Array(W * H)))[p]++; } }               /* MediaPipe: fundo */
+        else if (d > 60 && bgShare[p] >= 0.6) {                    /* MediaPipe: pessoa */
+          pAll++; if (m > 0.5) pAllTP++;
+          /* interior: os 8 vizinhos também são pessoa (fora da faixa de borda misturada) */
+          const yy = (p / W) | 0, xx = p % W;
+          let inner = yy > 0 && yy < H - 1 && xx > 0 && xx < W - 1;
+          for (let dy = -1; dy <= 1 && inner; dy++) for (let dx = -1; dx <= 1; dx++) if (diff(frames[k], p + dy * W + dx) <= 60) { inner = false; break; }
+          if (inner) { pN++; if (m > 0.5) pTP++; else (window.__miss || (window.__miss = new Uint16Array(W * H)))[p]++; }
+        }
+      }
+    }
+    Object.assign(out, { quadros: F, pixelsFundo: bgN, pixelsPessoa: pN, falsoPositivoFundo: +(bgFP / bgN).toFixed(4), acertoPessoa: +(pTP / pN).toFixed(4), acertoComBordas: +(pAllTP / pAll).toFixed(4), msMedio: +(ms.reduce((a, b) => a + b, 0) / ms.length).toFixed(1), worker: !!GSPortrait._seg.worker });
+    /* imagem de diagnóstico: quadro + máscara */
+    const r0 = await GSPortrait.segment((() => { const b = document.createElement('canvas'); b.width = 640; b.height = 360; b.getContext('2d').putImageData(bigFrames[10], 0, 0); return b; })(), 640, 360);
+    const d = document.createElement('canvas'); d.width = W; d.height = H; const dx = d.getContext('2d'); const id = dx.createImageData(W, H);
+    for (let p = 0; p < W * H; p++) { const m = r0.mask[p]; id.data[p * 4] = frames[10][p * 4] * 0.4 + 255 * m * 0.6; id.data[p * 4 + 1] = frames[10][p * 4 + 1] * 0.4; id.data[p * 4 + 2] = frames[10][p * 4 + 2] * 0.4; id.data[p * 4 + 3] = 255; }
+    dx.putImageData(id, 0, 0); window.__debugImg = d.toDataURL('image/png');
+    if (window.__miss) { const id2 = dx.createImageData(W, H); for (let p = 0; p < W * H; p++) { id2.data[p * 4] = Math.min(255, window.__miss[p] * 60); id2.data[p * 4 + 2] = frames[10][p * 4 + 2] * 0.5; id2.data[p * 4 + 1] = envD[p] ? 0 : 255; id2.data[p * 4 + 3] = 255; } dx.putImageData(id2, 0, 0); window.__fpImg = d.toDataURL('image/png'); }
+  } catch (e) { out.error = String(e && e.stack || e); }
+  window.__result = out;
+})();
+</script></body></html>

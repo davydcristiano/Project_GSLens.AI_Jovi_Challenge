@@ -1,0 +1,13 @@
+{
+  "name": "gslens-ai-tests",
+  "private": true,
+  "description": "Testes automáticos do GSLens.AI (unitários + ponta a ponta com câmera simulada)",
+  "scripts": {
+    "test": "node run-all.js",
+    "test:quick": "node run-all.js --quick",
+    "fixtures": "node fixtures/build.js"
+  },
+  "devDependencies": {
+    "playwright": "1.56.0"
+  }
+}

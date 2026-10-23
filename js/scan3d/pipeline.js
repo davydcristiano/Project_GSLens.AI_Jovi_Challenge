@@ -45,22 +45,37 @@
     opts = opts || {};
     const st = (s, f, extra) => { if (stage) stage(s, f, extra); };
     const warnings = [];
-    if (!keyframes || keyframes.length < 6) throw new Error('São necessárias pelo menos 6 vistas da prancha para reconstruir o objeto.');
+    if (!keyframes || keyframes.length < 6) throw new Error('São necessárias pelo menos 6 vistas para reconstruir o objeto.');
+
+    const surf = opts.surface || null;            /* modo sem prancha */
+    const views = [];
+    let cal;
 
     /* 1) Calibração */
     st('calib', 0);
     await GS3D.recon.yieldUI();
-    const cal = calibrate(keyframes, opts.fGuess);
+    if (surf) {
+      /* sem marcadores: focal e inclinação da referência estimadas pelas vistas */
+      cal = GS3D.surface.selfCalibrate(keyframes, surf.refPts, surf.ref.w, surf.ref.h, { f: opts.fGuess, tilt: surf.tilt });
+      keyframes.forEach((kf, i) => {
+        const p = cal.poses[i];
+        if (!p || p.rms > 3) return;
+        views.push(Object.assign({ rgba: kf.rgba, w: kf.w, h: kf.h, Hk: kf.H }, p));
+      });
+    } else {
+      cal = calibrate(keyframes, opts.fGuess);
+      keyframes.forEach((kf, i) => {
+        const p = cal.poses[i];
+        if (p.rms > 2.5) return;                       /* vista com rastreamento ruim */
+        views.push(Object.assign({ rgba: kf.rgba, w: kf.w, h: kf.h, H: kf.det.H }, p));
+      });
+    }
     abortIf(isCancelled);
-    const views = [];
-    keyframes.forEach((kf, i) => {
-      const p = cal.poses[i];
-      if (p.rms > 2.5) return;                       /* vista com rastreamento ruim */
-      views.push(Object.assign({ rgba: kf.rgba, w: kf.w, h: kf.h, H: kf.det.H }, p));
-    });
     const dropped = keyframes.length - views.length;
     if (dropped) warnings.push(dropped + ' vista(s) descartada(s) por rastreamento impreciso.');
-    if (views.length < 6) throw new Error('Rastreamento impreciso em muitas vistas. Ilumine melhor a prancha e evite movimentos rápidos.');
+    if (views.length < 6) throw new Error(surf
+      ? 'Rastreamento impreciso em muitas vistas. Use uma superfície com mais textura, ilumine bem e mova a câmera devagar.'
+      : 'Rastreamento impreciso em muitas vistas. Ilumine melhor a prancha e evite movimentos rápidos.');
     const rms = Math.sqrt(views.reduce((s, v) => s + v.rms * v.rms, 0) / views.length);
     st('calib', 1, { f: cal.f, rms });
 
@@ -69,7 +84,7 @@
     for (let i = 0; i < views.length; i++) {
       abortIf(isCancelled);
       const v = views[i];
-      const seg = GS3D.segment(v);
+      const seg = surf ? GS3D.surface.segmentSurface(v, surf.ref) : GS3D.segment(v);
       if (seg.mask) {
         v.mask = seg.mask; v.paperL0 = seg.paperL0; v.objFrac = seg.nObj / (v.w * v.h);
         segViews.push(v);
@@ -77,15 +92,17 @@
       st('segment', (i + 1) / views.length);
       await GS3D.recon.yieldUI();
     }
-    if (segViews.length < 6) throw new Error('A prancha ficou pouco visível nas fotos. Enquadre a folha inteira durante o escaneamento.');
+    if (segViews.length < 6) throw new Error(surf ? 'A superfície de referência ficou pouco visível nas fotos. Mantenha a mesa enquadrada ao redor do objeto.' : 'A prancha ficou pouco visível nas fotos. Enquadre a folha inteira durante o escaneamento.');
     const noObj = segViews.filter(v => v.objFrac < 0.002).length;
-    if (noObj > segViews.length / 2) throw new Error('Nenhum objeto foi detectado sobre a prancha. Coloque o objeto dentro do quadrado central (ele precisa contrastar com o papel branco).');
-    /* compensação de exposição entre vistas (pela luminância do papel) */
+    if (noObj > segViews.length / 2) throw new Error(surf
+      ? 'Nenhum objeto foi detectado sobre a superfície. Fotografe a mesa vazia, depois coloque o objeto no centro marcado.'
+      : 'Nenhum objeto foi detectado sobre a prancha. Coloque o objeto dentro do quadrado central (ele precisa contrastar com o papel branco).');
+    /* compensação de exposição entre vistas (pela luminância do papel/mesa) */
     const refL = M.median(segViews.map(v => v.paperL0).filter(x => x > 0));
     for (const v of segViews) v.gain = v.paperL0 > 0 ? Math.max(0.6, Math.min(1.6, refL / v.paperL0)) : 1;
 
     /* 3) Esculpimento */
-    const vol = GS3D.board.VOLUME;
+    const vol = surf ? (surf.volume || GS3D.surface.VOLUME) : GS3D.board.VOLUME;
     const res = opts.resolution || 96;
     const carveViews = segViews.map(v => ({ P: GS3D.recon.projMatrix(v.K, v.R, v.t), w: v.w, h: v.h, mask: v.mask }));
     const grid = await GS3D.recon.carve(carveViews, vol, res, f => st('carve', f * 0.85), isCancelled, opts.tolerance);
@@ -105,7 +122,7 @@
       tot++;
       if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) wall++;
     }
-    if (wall > 0.01 * tot) warnings.push('O objeto parece ultrapassar a área útil (11 × 11 × 11 cm) — partes podem ter sido cortadas.');
+    if (wall > 0.01 * tot) warnings.push(surf ? 'O objeto parece ultrapassar a caixa marcada na tela — partes podem ter sido cortadas. Afaste a câmera ao fotografar a mesa.' : 'O objeto parece ultrapassar a área útil (11 × 11 × 11 cm) — partes podem ter sido cortadas.');
     st('carve', 1);
     await GS3D.recon.yieldUI();
 
@@ -134,7 +151,7 @@
       positions: mesh.positions, indices: mesh.indices, normals: mesh.normals, uvs: tex.uvs,
       png, textureCanvas: canvas, textureSize: tex.size,
       stats: {
-        views: segViews.length, captured: keyframes.length, focalPx: cal.f, reprojRms: rms,
+        views: segViews.length, captured: keyframes.length, focalPx: cal.f, reprojRms: rms, mode: surf ? 'surface' : 'board', approxScale: !!surf,
         vertices: mesh.positions.length / 3, triangles: mesh.indices.length / 3,
         sizeMm: bounds.size, voxelMm: grid.vs, coverage: tex.coverage, openEdges: val.openEdges
       },

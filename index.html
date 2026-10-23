@@ -18,17 +18,17 @@
        com boa aparência mesmo sem baixar fontes externas. -->
 
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
-  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261022c">
+  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261022d">
 
   <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
        PDF em lote e pela prancha imprimível do Scanner 3D.
        Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
        a tela mostra os mesmos dados em lista em vez de quebrar. -->
-  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261022c" defer></script>
+  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261022d" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
-  <link rel="stylesheet" href="css/style.css?v=20261022c">
+  <link rel="stylesheet" href="css/style.css?v=20261022d">
 </head>
 
 <body class="theme-dark">
@@ -144,6 +144,7 @@
     <!-- VISOR -->
     <div class="viewfinder" id="viewfinder">
       <video id="video" autoplay playsinline muted></video>
+      <canvas id="liveCanvas" class="hidden" aria-hidden="true"></canvas>
       <canvas id="filterCanvas" class="hidden" aria-hidden="true"></canvas>
       <canvas id="fxCanvas" aria-hidden="true"></canvas>
       <canvas id="scanCanvas" aria-hidden="true"></canvas>
@@ -171,6 +172,7 @@
       </div>
 
       <div class="mode-badge" id="modeBadge">FOTO</div>
+      <div class="portrait-badge hidden" id="portraitBadge" role="status" aria-live="polite"></div>
       <div class="ar-badge hidden" id="arBadge"><span class="ar-pulse"></span>AR · 3D</div>
       <div class="ar-badge fx-badge hidden" id="fxBadge"><span class="ar-pulse"></span>EFEITOS</div>
       <div class="af-badge hidden" id="afBadge">AF ●</div>
@@ -221,6 +223,13 @@
         <span class="zl" id="evVal">0</span>
       </div>
 
+      <!-- Retrato: intensidade do desfoque do fundo (como a abertura f/ das câmeras) -->
+      <div class="portrait-strip hidden d-flex align-items-center px-3 py-2" id="portraitStrip">
+        <span class="zl" title="Desfoque do fundo">◐</span>
+        <input type="range" class="custom-range mx-2" id="portraitSlider" min="0" max="1" step="0.05" value="0.6" oninput="setPortraitAmount(this.value)" aria-label="Intensidade do desfoque do fundo">
+        <span class="zl" id="portraitVal">f/2.8</span>
+      </div>
+
       <!-- Zoom -->
       <div class="zoom-strip d-flex align-items-center px-3 py-2">
         <span class="zl">1×</span>
@@ -250,9 +259,14 @@
           <div class="section-label mb-0">Scanner 3D · Realidade Aumentada</div>
           <span class="scan-count ml-auto" id="scanCount">0 vistas</span>
         </div>
+        <div class="scan-modes" role="group" aria-label="Referência do escaneamento">
+          <button class="btn scan-mode-opt" data-mode="board" onclick="Scan3D.setScanMode('board')" aria-pressed="true">📄 Com prancha</button>
+          <button class="btn scan-mode-opt" data-mode="surface" onclick="Scan3D.setScanMode('surface')" aria-pressed="false">🪵 Sem prancha</button>
+        </div>
         <div class="scan-status" id="scanStatus" role="status" aria-live="polite">Aponte a câmera para a prancha impressa.</div>
         <div class="scan-progress" role="progressbar" aria-label="Cobertura do escaneamento" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="scan-progress-bar" id="scanProgressBar"></div></div>
         <div class="scan-actions">
+          <button class="btn scan-btn surface-only" id="scanRefBtn" onclick="Scan3D.captureReference()" title="Fotografar a mesa vazia (referência)">📷 Mesa vazia</button>
           <button class="btn scan-btn" id="scanStartBtn" onclick="Scan3D.start()">▶ Iniciar</button>
           <button class="btn scan-btn" id="scanPauseBtn" onclick="Scan3D.pause()" disabled>⏸ Pausar</button>
           <button class="btn scan-btn" id="scanCancelBtn" onclick="Scan3D.cancel()" disabled>✕ Cancelar</button>
@@ -260,7 +274,7 @@
           <button class="btn scan-btn primary" id="scanBuildBtn" onclick="Scan3D.build()" disabled>🧊 Gerar 3D</button>
         </div>
         <div class="scan-links">
-          <button class="btn scan-link" onclick="Scan3D.downloadBoard()">🖨️ Prancha A4</button>
+          <button class="btn scan-link board-only" onclick="Scan3D.downloadBoard()">🖨️ Prancha A4</button>
           <button class="btn scan-link" onclick="Scan3D.showHelp()">❔ Como escanear</button>
           <label class="scan-link scan-quality mb-0">Qualidade
             <select id="scanQuality" class="form-control form-control-sm" aria-label="Qualidade da malha">
@@ -652,6 +666,16 @@
         <div class="scan-card">
           <h3 class="scan-card-title">Informações</h3>
           <div id="scanStats"></div>
+          <div class="scale-fix hidden" id="scaleFix">
+            <p class="scale-fix-note">Sem a prancha a escala é aproximada. Informe uma medida real do objeto para corrigir:</p>
+            <div class="scale-fix-row">
+              <select id="scaleAxis" class="form-control form-control-sm" aria-label="Medida">
+                <option value="2">Altura</option><option value="0">Largura</option><option value="1">Profundidade</option>
+              </select>
+              <input id="scaleValue" class="form-control form-control-sm" type="number" inputmode="decimal" min="1" step="0.1" placeholder="mm" aria-label="Medida real em milímetros">
+              <button class="btn btn-sm btn-accent" onclick="Scan3D.applyRealSize()">Aplicar</button>
+            </div>
+          </div>
           <ul class="scan-warnings hidden" id="scanWarnings"></ul>
         </div>
         <div class="scan-card">
@@ -677,6 +701,15 @@
       <div class="modal-handle"></div>
       <div class="p-3">
         <h3 class="batch-title" id="scanHelpTitle">Como escanear um objeto em 3D</h3>
+        <h4 class="help-sub">🪵 Sem prancha (qualquer mesa com textura)</h4>
+        <ol class="help-list">
+          <li>Escolha <strong>"Sem prancha"</strong>. Use uma superfície com desenho: tampo de madeira, toalha estampada, revista ou jornal aberto. Superfícies lisas (vidro, branco liso) não funcionam.</li>
+          <li>Com a mesa <strong>vazia</strong>, aponte a câmera de cima (a ~30 cm) e toque em <strong>"📷 Mesa vazia"</strong>.</li>
+          <li>Coloque o objeto <strong>no centro da caixa</strong> que aparece na tela, sem mexer na toalha/revista, e toque em <strong>Iniciar</strong>.</li>
+          <li>Contorne o objeto devagar em três alturas, sempre mostrando a mesa ao redor dele. A lente e a inclinação são calibradas automaticamente pelas vistas.</li>
+          <li>Depois de gerar, informe uma medida real (ex.: a altura) para corrigir a escala — sem a prancha ela é aproximada.</li>
+        </ol>
+        <h4 class="help-sub">📄 Com prancha impressa (escala exata)</h4>
         <ol class="help-list">
           <li><strong>Imprima a prancha</strong> (botão "🖨️ Prancha A4") em tamanho real, sem "ajustar à página". Confira a barra de 50 mm.</li>
           <li>Coloque a folha numa mesa e o <strong>objeto dentro do quadrado central</strong> (até ~11 × 11 × 11 cm). Objetos que contrastam com o papel branco funcionam melhor.</li>
@@ -735,30 +768,47 @@
   <!-- jQuery / Popper / bootstrap.js foram removidos: auditoria confirmou
        que nada neste projeto usa $()/jQuery nem componentes JS do Bootstrap
        (data-toggle, data-dismiss, .modal() etc.) — os modais e abas daqui
-       são controlados por script.js puro, via classList. Eram ~90KB
+       são controlados por js/app/*.js puro, via classList. Eram ~90KB
        carregados à toa em cada visita. -->
 
   <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
   <!-- Leitor de QR (jsQR, Apache-2.0) + filtros e molduras + leitor de links -->
-  <script src="js/vendor/jsqr/jsQR.js?v=20261022c" defer></script>
-  <script src="js/filters.js?v=20261022c"></script>
-  <script src="js/frames.js?v=20261022c"></script>
-  <script src="js/links/linkscan.js?v=20261022c"></script>
-  <script src="js/nightslow.js?v=20261022c"></script>
-  <script src="js/vendor/aruco/cv.js?v=20261022c"></script>
-  <script src="js/vendor/aruco/aruco.js?v=20261022c"></script>
+  <script src="js/vendor/jsqr/jsQR.js?v=20261022d" defer></script>
+  <script src="js/filters.js?v=20261022d"></script>
+  <script src="js/frames.js?v=20261022d"></script>
+  <script src="js/links/linkscan.js?v=20261022d"></script>
+  <script src="js/nightslow.js?v=20261022d"></script>
+  <script src="js/portrait/tflite.js?v=20261022d"></script>
+  <script src="js/portrait/portrait.js?v=20261022d"></script>
+  <script src="js/vendor/aruco/cv.js?v=20261022d"></script>
+  <script src="js/vendor/aruco/aruco.js?v=20261022d"></script>
   <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
-  <script src="js/scan3d/math.js?v=20261022c"></script>
-  <script src="js/scan3d/board.js?v=20261022c"></script>
-  <script src="js/scan3d/tracker.js?v=20261022c"></script>
-  <script src="js/scan3d/segment.js?v=20261022c"></script>
-  <script src="js/scan3d/reconstruct.js?v=20261022c"></script>
-  <script src="js/scan3d/texture.js?v=20261022c"></script>
-  <script src="js/scan3d/pipeline.js?v=20261022c"></script>
-  <script src="js/scan3d/exporters.js?v=20261022c"></script>
-  <script src="js/scan3d/viewer.js?v=20261022c"></script>
-  <script src="js/scan3d/app.js?v=20261022c"></script>
-  <script src="js/script.js?v=20261022c"></script>
+  <script src="js/scan3d/math.js?v=20261022d"></script>
+  <script src="js/scan3d/board.js?v=20261022d"></script>
+  <script src="js/scan3d/tracker.js?v=20261022d"></script>
+  <script src="js/scan3d/features.js?v=20261022d"></script>
+  <script src="js/scan3d/surface.js?v=20261022d"></script>
+  <script src="js/scan3d/segment.js?v=20261022d"></script>
+  <script src="js/scan3d/reconstruct.js?v=20261022d"></script>
+  <script src="js/scan3d/texture.js?v=20261022d"></script>
+  <script src="js/scan3d/pipeline.js?v=20261022d"></script>
+  <script src="js/scan3d/exporters.js?v=20261022d"></script>
+  <script src="js/scan3d/viewer.js?v=20261022d"></script>
+  <script src="js/scan3d/app.js?v=20261022d"></script>
+  <!-- App (antes um único script.js de 2.300 linhas), na ordem de dependência -->
+  <script src="js/app/core.js?v=20261022d"></script>
+  <script src="js/app/camera.js?v=20261022d"></script>
+  <script src="js/app/camera-filters.js?v=20261022d"></script>
+  <script src="js/app/modes.js?v=20261022d"></script>
+  <script src="js/app/recording.js?v=20261022d"></script>
+  <script src="js/app/live-fx.js?v=20261022d"></script>
+  <script src="js/app/capture.js?v=20261022d"></script>
+  <script src="js/app/gallery.js?v=20261022d"></script>
+  <script src="js/app/editor.js?v=20261022d"></script>
+  <script src="js/app/analysis.js?v=20261022d"></script>
+  <script src="js/app/share-export.js?v=20261022d"></script>
+  <script src="js/app/dashboard.js?v=20261022d"></script>
+  <script src="js/app/main.js?v=20261022d"></script>
 </body>
 
 </html>

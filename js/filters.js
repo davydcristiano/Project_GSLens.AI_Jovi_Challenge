@@ -173,13 +173,15 @@
     P.raf = 0;
     if (!P.id || !P.video) return;
     const v = P.video, gl = P.gl, c = P.canvas;
-    if (v.videoWidth && v.readyState >= 2) {
-      const sc = Math.min(1, 1280 / Math.max(v.videoWidth, v.videoHeight));
-      const w = Math.round(v.videoWidth * sc), h = Math.round(v.videoHeight * sc);
+    /* fonte: o <video> ou a camada processada ao vivo (canvas do Noite/Retrato) */
+    const isVid = v.tagName === 'VIDEO', vw = isVid ? v.videoWidth : v.width, vh = isVid ? v.videoHeight : v.height;
+    if (vw && (!isVid || v.readyState >= 2)) {
+      const sc = Math.min(1, 1280 / Math.max(vw, vh));
+      const w = Math.round(vw * sc), h = Math.round(vh * sc);
       if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
       gl.viewport(0, 0, w, h);
-      gl.uniform2f(P.loc.res, v.videoWidth, v.videoHeight);
-      gl.uniform1f(P.loc.gs, Math.max(1, Math.round(Math.max(v.videoWidth, v.videoHeight) / 900)));
+      gl.uniform2f(P.loc.res, vw, vh);
+      gl.uniform1f(P.loc.gs, Math.max(1, Math.round(Math.max(vw, vh) / 900)));
       gl.bindTexture(gl.TEXTURE_2D, P.tex);
       try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, v); } catch (e) { stopPreview(); return; }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);

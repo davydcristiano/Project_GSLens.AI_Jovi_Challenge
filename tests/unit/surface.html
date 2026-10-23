@@ -1,0 +1,94 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Scanner sem prancha (sintético)</title></head><body>
+<script type="importmap">{"imports":{"three":"../vendor/three/build/three.module.js"}}</script>
+<script src="../../js/vendor/aruco/cv.js"></script>
+<script src="../../js/vendor/aruco/aruco.js"></script>
+<script src="../../js/scan3d/math.js"></script>
+<script src="../../js/scan3d/board.js"></script>
+<script src="../../js/scan3d/features.js"></script>
+<script src="../../js/scan3d/surface.js"></script>
+<script src="../../js/scan3d/segment.js"></script>
+<script src="../../js/scan3d/reconstruct.js"></script>
+<script src="../../js/scan3d/texture.js"></script>
+<script src="../../js/scan3d/pipeline.js"></script>
+<script type="module">
+import { Synth, makePose } from '../fixtures/synth.js';
+const q = new URLSearchParams(location.search);
+const out = {};
+try {
+  const M = GS3D.math, S3 = GS3D.surface, F = GS3D.features;
+  const W = 960, H = 540, f = 760, LW = 640, LH = 360, sc = LW / W;
+  const tiltTrue = [+(q.get('ax') || 0.10), +(q.get('ay') || -0.07)], dTrue = +(q.get('d') || 300);
+  const s = new Synth(W, H, f, { surface: 'texture', shadows: q.get('shadows') === '1' });
+  s.addObject(q.get('obj') || 'mug');
+  const small = document.createElement('canvas'); small.width = LW; small.height = LH; const sx = small.getContext('2d', { willReadFrequently: true });
+  const big = document.createElement('canvas'); big.width = W; big.height = H; const bx = big.getContext('2d', { willReadFrequently: true });
+  const shoot = pose => { const img = s.render(pose); bx.putImageData(img, 0, 0); sx.drawImage(big, 0, 0, LW, LH); return { big: img, small: sx.getImageData(0, 0, LW, LH) }; };
+
+  /* referência: mesa vazia, câmera a dTrue mm com inclinação conhecida */
+  const refP = S3.refPose(tiltTrue[0], tiltTrue[1], dTrue);
+  s.objects.visible = false;
+  const ref = shoot(refP);
+  s.objects.visible = true;
+  const live = new S3.SurfaceTracker(), kft = new S3.SurfaceTracker();
+  const r1 = live.setReference(ref.small), r2 = kft.setReference(ref.big);
+  out.refPts = [r1.n, r2.n];
+  if (!r1.ok || !r2.ok) throw new Error('referência: ' + (r1.reason || r2.reason));
+
+  /* trajetória: da referência até a órbita, depois 3 voltas em alturas diferentes */
+  const lerpPose = (A, B, t) => {
+    const Rrel = M.mul3(B.R, M.transpose3(A.R)), w = M.matToRodrigues(Rrel).map(v => v * t);
+    const R = M.mul3(M.rodriguesToMat(w), A.R);
+    const CA = M.cameraCenter(A.R, A.t), CB = M.cameraCenter(B.R, B.t), C = CA.map((v, i) => v + (CB[i] - v) * t);
+    return { R, t: M.mul3v(R, C).map(v => -v), C };
+  };
+  const poses = [];
+  const els = [68, 45, 28], dist = [330, 360, 380], step = +(q.get('step') || 1.5);
+  const first = makePose(-90, els[0], dist[0], [0, 0, 25]);
+  for (let k = 1; k <= 40; k++) poses.push(lerpPose(refP, first, k / 40));
+  els.forEach((el, li) => {
+    if (li) { const a = poses[poses.length - 1], b = makePose(-90, el, dist[li], [0, 0, 25]); for (let k = 1; k <= 20; k++) poses.push(lerpPose(a, b, k / 20)); }
+    for (let az = 0; az < 360; az += step) poses.push(makePose(-90 + az, el + 2 * Math.sin(az / 20), dist[li] + 10 * Math.sin(az / 33), [0, 0, 25], 0.04 * Math.sin(az / 15)));
+  });
+
+  /* homografia verdadeira referência→quadro (resolução do rastreamento) */
+  const Kl = M.kForImage(f * sc, LW, LH);
+  const Gref = M.mul3(Kl, [refP.R[0], refP.R[1], refP.t[0], refP.R[3], refP.R[4], refP.t[1], refP.R[6], refP.R[7], refP.t[2]]);
+  const trueH = p => M.mul3(M.mul3(Kl, [p.R[0], p.R[1], p.t[0], p.R[3], p.R[4], p.t[1], p.R[6], p.R[7], p.t[2]]), M.inv3(Gref));
+  const grid = []; for (let y = 40; y < LH - 40; y += 40) for (let x = 40; x < LW - 40; x += 40) grid.push([x, y]);
+  let errs = [], lost = 0, ms = 0;
+  const kfs = [], bins = new Set(), Sm = [1 / sc, 0, 0, 0, 1 / sc, 0, 0, 0, 1], Smi = [sc, 0, 0, 0, sc, 0, 0, 0, 1];
+  const every = +(q.get('every') || 1);   /* processa 1 a cada N quadros (simula aparelho lento / movimento rápido) */
+  let processed = 0;
+  for (let i = 0; i < poses.length; i += (i < 40 ? 1 : every)) {
+    const p = poses[i], fr = shoot(p); processed++;
+    const t0 = performance.now(); const r = live.track(fr.small); ms += performance.now() - t0;
+    if (!r.ok) { lost++; continue; }
+    const Ht = trueH(p);
+    let e = 0, n = 0;
+    for (const g of grid) { const a = F.applyH(r.H, g), b = F.applyH(Ht, g); if (b[0] > 0 && b[1] > 0 && b[0] < LW && b[1] < LH) { e += Math.hypot(a[0] - b[0], a[1] - b[1]); n++; } }
+    if (n) errs.push(e / n);
+    /* quadro-chave a cada 30° de azimute por faixa de altura (36 no total, como no app) */
+    if (i > 40) {
+      const C = M.cameraCenter(p.R, p.t), az = (Math.atan2(C[1], C[0]) * 180 / Math.PI + 360) % 360, el = Math.atan2(C[2], Math.hypot(C[0], C[1])) * 180 / Math.PI;
+      const key = (el < 36 ? 0 : el < 56 ? 1 : 2) + ':' + Math.floor(az / 30);
+      if (!bins.has(key)) {
+        const Hp = M.mul3(Sm, M.mul3(r.H, Smi));
+        const rk = kft.refineImage(fr.big, Hp);
+        if (rk) { bins.add(key); kfs.push({ rgba: fr.big.data, w: W, h: H, H: rk.H, matches: rk.matches, truth: p }); }
+      }
+    }
+  }
+  errs.sort((a, b) => a - b);
+  out.frames = processed; out.lost = lost; out.msPerFrame = +(ms / processed).toFixed(1);
+  out.trackErrPx = { median: +errs[errs.length >> 1].toFixed(2), p95: +errs[Math.floor(errs.length * 0.95)].toFixed(2), max: +errs[errs.length - 1].toFixed(2) };
+  out.keyframes = kfs.length;
+  if (q.get('trackonly')) { window.__result = out; throw 0; }
+  const t1 = performance.now();
+  const r = await GS3D.pipeline.buildModel(kfs, { resolution: +(q.get('res') || 96), surface: { ref: { rgba: ref.big.data, w: W, h: H }, refPts: kft.ref.pts, tilt: q.get('gravity') ? tiltTrue : undefined } }, () => { });
+  out.buildMs = Math.round(performance.now() - t1);
+  out.stats = r.stats; out.warnings = r.warnings; out.truth = s.truth;
+  out.focalErrPct = +((r.stats.focalPx / f - 1) * 100).toFixed(2);
+  window.__debugImg = r.textureCanvas.toDataURL('image/png');
+} catch (e) { if (e !== 0) out.error = String(e && e.stack || e); }
+window.__result = out;
+</script></body></html>

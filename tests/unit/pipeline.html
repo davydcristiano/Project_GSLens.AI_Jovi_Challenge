@@ -1,0 +1,86 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body>
+<script type="importmap">{"imports":{"three":"../vendor/three/build/three.module.js"}}</script>
+<script src="../../js/vendor/aruco/cv.js"></script>
+<script src="../../js/vendor/aruco/aruco.js"></script>
+<script src="../../js/scan3d/math.js"></script>
+<script src="../../js/scan3d/board.js"></script>
+<script src="../../js/scan3d/tracker.js"></script>
+<script src="../../js/scan3d/segment.js"></script>
+<script src="../../js/scan3d/reconstruct.js"></script>
+<script src="../../js/scan3d/texture.js"></script>
+<script src="../../js/scan3d/pipeline.js"></script>
+<script src="../../js/scan3d/exporters.js"></script>
+<script type="module">
+import { Synth, makePose } from '../fixtures/synth.js';
+import * as THREE from '../vendor/three/build/three.module.js';
+import { GLTFLoader } from '../vendor/three/examples/jsm/loaders/GLTFLoader.js';
+import { OBJLoader } from '../vendor/three/examples/jsm/loaders/OBJLoader.js';
+import { STLLoader } from '../vendor/three/examples/jsm/loaders/STLLoader.js';
+import { FBXLoader } from '../vendor/three/examples/jsm/loaders/FBXLoader.js';
+const q = new URLSearchParams(location.search);
+const kind = q.get('obj') || 'box', shadows = q.get('shadows') === '1', res = +(q.get('res') || 96);
+const out = { kind, shadows };
+try {
+  const w = 960, h = 540, f = 760;
+  const s = new Synth(w, h, f, { shadows });
+  s.addObject(kind);
+  const tr = new GS3D.Tracker();
+  const kfs = [];
+  const t0 = performance.now();
+  for (let i = 0; i < 24; i++) {
+    const az = i * 15, el = q.get('top') ? [35, 55, 78][i % 3] : (i % 2 ? 40 : 62), d = 380 + (i % 3) * 25;
+    const pose = makePose(az, el, d, [0, 0, 25], (i % 4 - 1.5) * 0.08);
+    const img = s.render(pose);
+    const det = tr.detect(img);
+    if (!det.ok) continue;
+    kfs.push({ rgba: img.data, w, h, det });
+  }
+  out.keyframes = kfs.length;
+  out.detectMs = Math.round(performance.now() - t0);
+  const cal = GS3D.pipeline.calibrate(kfs); out.cal = { f: cal.f, fLinear: cal.fLinear, rms: cal.poses.map(p => +p.rms.toFixed(2)) };
+  if (q.get('probe')) {
+    const X = q.get('probe').split(',').map(Number); const info = [];
+    kfs.forEach((kf, i) => { const p = cal.poses[i]; const sg = GS3D.segment(Object.assign({ rgba: kf.rgba, w: kf.w, h: kf.h, H: kf.det.H }, p));
+      const pr = GS3D.math.project(p.K, p.R, p.t, X); const u = Math.round(pr[0]), v = Math.round(pr[1]);
+      const inb = u >= 0 && v >= 0 && u < kf.w && v < kf.h; info.push([i, inb ? sg.mask[v * kf.w + u] : 'out']);
+      if (i == +(q.get('dump') || -1)) { const c = document.createElement('canvas'); c.width = kf.w; c.height = kf.h; const id = new ImageData(kf.w, kf.h);
+        for (let k = 0; k < kf.w * kf.h; k++) { const m = sg.mask[k]; const col = m === 1 ? [255, 0, 0] : m === 0 ? [255, 255, 255] : [0, 0, 255]; id.data.set([kf.rgba[4*k]*0.4+col[0]*0.6, kf.rgba[4*k+1]*0.4+col[1]*0.6, kf.rgba[4*k+2]*0.4+col[2]*0.6, 255], 4 * k); }
+        id.data.set([0,255,0,255], 4*(v*kf.w+u)); c.getContext('2d').putImageData(id, 0, 0); window.__debugImg = c.toDataURL(); } });
+    out.probe = info.map(x => x.join(':')).join(' '); window.__result = out; throw 0; }
+  if (q.get('calonly')) { window.__result = out; throw 0; }
+  const stages = [];
+  const t1 = performance.now();
+  if (q.get('noexport')) window.__noexp = 1;
+  const r = await GS3D.pipeline.buildModel(kfs, { resolution: res, tolerance: q.get('tol') ? +q.get('tol') : undefined }, (st, fr, ex) => { if (fr === 1) stages.push(st + ' @' + Math.round(performance.now() - t1) + 'ms' + (ex ? JSON.stringify(ex) : '')); });
+  out.buildMs = Math.round(performance.now() - t1);
+  out.stages = stages;
+  out.stats = r.stats; out.warnings = r.warnings; out.truth = s.truth;
+  out.focalErrPct = +((r.stats.focalPx / f - 1) * 100).toFixed(2);
+  if (window.__noexp) { window.__result = out; throw 0; }
+  // ── exportações + recarga com loaders independentes
+  const ex = GS3D.exporters, chk = {};
+  const glb = ex.toGLB(r);
+  const gl = await new GLTFLoader().parseAsync(glb.bytes.buffer.slice(0), '');
+  let mesh; gl.scene.traverse(o => { if (o.isMesh) mesh = o; });
+  const bb = new THREE.Box3().setFromObject(gl.scene).getSize(new THREE.Vector3());
+  chk.glb = { bytes: glb.bytes.length, tris: mesh.geometry.index.count / 3, hasMap: !!mesh.material.map, sizeM: bb.toArray().map(v => +v.toFixed(4)) };
+  const stl = ex.toSTL(r);
+  const sg = new STLLoader().parse(stl.bytes.buffer.slice(0)); sg.computeBoundingBox();
+  chk.stl = { bytes: stl.bytes.length, tris: sg.attributes.position.count / 3, sizeMm: sg.boundingBox.getSize(new THREE.Vector3()).toArray().map(v => +v.toFixed(2)) };
+  const objz = ex.toOBJZip(r);
+  const objText = new TextDecoder().decode(objz.files[0].data);
+  const og = new OBJLoader().parse(objText); let om; og.traverse(o => { if (o.isMesh) om = o; });
+  chk.obj = { zipBytes: objz.bytes.length, tris: om.geometry.attributes.position.count / 3, hasUV: !!om.geometry.attributes.uv, sizeM: new THREE.Box3().setFromObject(og).getSize(new THREE.Vector3()).toArray().map(v => +v.toFixed(4)) };
+  const gz = ex.toGLTFZip(r);
+  chk.gltfZip = { zipBytes: gz.bytes.length, files: gz.files.map(f => f.name + ':' + f.data.length) };
+  const fbx = ex.toFBX(r);
+  const fl = new FBXLoader().parse(fbx.bytes.buffer.slice(0), '');
+  let fm; fl.traverse(o => { if (o.isMesh) fm = o; });
+  const fbb = new THREE.Box3().setFromObject(fl).getSize(new THREE.Vector3());
+  chk.fbx = { bytes: fbx.bytes.length, tris: fm ? fm.geometry.attributes.position.count / 3 : 0, hasMap: !!(fm && fm.material && fm.material.map), sizeLoaded: fbb.toArray().map(v => +v.toFixed(3)) };
+  out.exports = chk;
+  window.__exports = { glb: glb.bytes, stl: stl.bytes, fbx: fbx.bytes, objzip: objz.bytes, gltfzip: gz.bytes };
+  window.__debugImg = r.textureCanvas.toDataURL('image/png');
+  window.__result = out;
+} catch (e) { if (e === 0) {} else out.error = String(e && e.stack || e); window.__result = out; }
+</script></body></html>

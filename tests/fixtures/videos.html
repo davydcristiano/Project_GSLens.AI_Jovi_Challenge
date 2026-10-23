@@ -1,0 +1,133 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Gerador de vídeos de teste</title></head><body>
+<!-- Gera, quadro a quadro, os vídeos usados como "câmera falsa" do Chromium.
+     Cada gerador expõe frameCount e frame(i) → bytes JPEG. -->
+<script src="../../js/vendor/aruco/cv.js"></script>
+<script src="../../js/vendor/aruco/aruco.js"></script>
+<script src="../../js/scan3d/math.js"></script>
+<script src="../../js/scan3d/board.js"></script>
+<script src="../../js/scan3d/features.js"></script>
+<script src="../../js/scan3d/surface.js"></script>
+<script src="qrcode.js"></script>
+<script src="decode.js"></script>
+<script type="module">
+import { Synth, makePose } from './synth.js';
+const q = new URLSearchParams(location.search);
+const base = q.get('base') || location.origin;
+
+const jpeg = async (canvas, quality = 0.88) => {
+  const b = await new Promise(r => canvas.toBlob(r, 'image/jpeg', quality));
+  return Array.from(new Uint8Array(await b.arrayBuffer()));
+};
+
+const GEN = {};
+
+/* Scanner 3D com prancha: órbita completa em 3 alturas ao redor de uma "caneca" */
+GEN['scan-board'] = () => {
+  const s = new Synth(960, 540, 760, {}); s.addObject('mug');
+  const step = 0.7, per = Math.round(360 / step);
+  return { count: per * 3, async frame(i) {
+    const loop = Math.floor(i / per), az = (i % per) * step, el = [25, 45, 70][Math.min(2, loop)];
+    s.render(makePose(az + loop * 7, el + 3 * Math.sin(i / 40), 400 + 20 * Math.sin(i / 55), [0, 0, 25], 0.05 * Math.sin(i / 30)));
+    return jpeg(s.canvas);
+  } };
+};
+
+/* Scanner SEM prancha: 10 s da mesa vazia vista de cima (para "Fotografar mesa
+   vazia"), depois o objeto aparece e a câmera contorna em 3 alturas */
+GEN['scan-surface'] = () => {
+  const M = GS3D.math;
+  const s = new Synth(960, 540, 760, { surface: 'texture' }); s.addObject('mug');
+  const refP = GS3D.surface.refPose(0.08, -0.05, 300);
+  const lerp = (A, B, t) => {
+    const w = M.matToRodrigues(M.mul3(B.R, M.transpose3(A.R))).map(v => v * t), R = M.mul3(M.rodriguesToMat(w), A.R);
+    const CA = M.cameraCenter(A.R, A.t), CB = M.cameraCenter(B.R, B.t), C = CA.map((v, i) => v + (CB[i] - v) * t);
+    return { R, t: M.mul3v(R, C).map(v => -v) };
+  };
+  const jit = (P, i) => lerp(P, makePose(-90, 85, 300, [0, 0, 0]), 0.004 * Math.sin(i / 9));
+  const poses = [];
+  for (let i = 0; i < 300; i++) poses.push({ p: jit(refP, i), obj: false });
+  for (let i = 0; i < 20; i++) poses.push({ p: refP, obj: true });
+  const els = [68, 45, 28], dist = [330, 360, 380];
+  let last = refP;
+  els.forEach((el, li) => {
+    const b = makePose(-90, el, dist[li], [0, 0, 25]);
+    for (let k = 1; k <= 40; k++) poses.push({ p: lerp(last, b, k / 40), obj: true });
+    for (let az = 0; az < 360; az += 0.7) poses.push({ p: makePose(-90 + az, el + 2 * Math.sin(az / 20), dist[li] + 10 * Math.sin(az / 33), [0, 0, 25], 0.04 * Math.sin(az / 15)), obj: true });
+    last = poses[poses.length - 1].p;
+  });
+  return { count: poses.length, async frame(i) {
+    s.objects.visible = poses[i].obj;
+    s.render(poses[i].p);
+    return jpeg(s.canvas);
+  } };
+};
+
+/* Leitor: QR com link (aponta para a mini página de teste), link impresso, QR de Wi‑Fi */
+GEN['links'] = () => {
+  const W = 960, H = 540, c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+  const qrCanvas = (text, cell) => { const qq = qrcode(0, 'M'); qq.addData(text); qq.make(); const n = qq.getModuleCount(), s = (n + 8) * cell, k = document.createElement('canvas'); k.width = k.height = s; const g = k.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, s, s); g.fillStyle = '#000'; for (let r = 0; r < n; r++) for (let cc = 0; cc < n; cc++) if (qq.isDark(r, cc)) g.fillRect((cc + 4) * cell, (r + 4) * cell, cell, cell); return k; };
+  const qUrl = qrCanvas(base + '/tests/fixtures/minipage.html', 7), qWifi = qrCanvas('WIFI:T:WPA;S:GSLens Lab;P:senha-forte-123;;', 7);
+  const bg = i => { x.fillStyle = '#6d5a48'; x.fillRect(0, 0, W, H); x.fillStyle = 'rgba(0,0,0,.08)'; for (let k = 0; k < 30; k++) x.fillRect((k * 97 + i) % W, (k * 53) % H, 140, 6); };
+  const card = (draw, i) => { x.save(); x.translate(W / 2 + Math.sin(i / 20) * 15, H / 2 + Math.cos(i / 25) * 8); x.rotate(Math.sin(i / 30) * 0.06); x.fillStyle = '#f6f3ec'; x.shadowColor = 'rgba(0,0,0,.4)'; x.shadowBlur = 20; x.fillRect(-260, -200, 520, 400); x.shadowBlur = 0; draw(); x.restore(); };
+  return { count: 600, async frame(i) {
+    bg(i);
+    if (i >= 60 && i < 170) card(() => { x.drawImage(qUrl, -qUrl.width / 2, -qUrl.height / 2 - 20); x.fillStyle = '#333'; x.font = '22px sans-serif'; x.textAlign = 'center'; x.fillText('Escaneie o cardápio', 0, 170); }, i);
+    else if (i >= 230 && i < 380) card(() => { x.fillStyle = '#222'; x.textAlign = 'center'; x.font = '26px sans-serif'; x.fillText('Promoção de inverno! Acesse:', 0, -40); x.font = 'bold 22px sans-serif'; x.fillText('www.gslens-teste.com.br/promo', 0, 30); x.font = '20px sans-serif'; x.fillText('ofertas válidas até domingo', 0, 90); }, i);
+    else if (i >= 440 && i < 560) card(() => { x.drawImage(qWifi, -qWifi.width / 2, -qWifi.height / 2 - 20); x.fillStyle = '#333'; x.font = '22px sans-serif'; x.textAlign = 'center'; x.fillText('Wi-Fi dos visitantes', 0, 175); }, i);
+    return jpeg(c, 0.9);
+  } };
+};
+
+/* Noite: cena escura com ruído de sensor, tremor de mão e uma bola rápida.
+   A cena limpa (sem ruído, sem escurecer) fica em window.cleanScene para comparação. */
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+GEN['night'] = () => {
+  const W = 1280, H = 720, M = 20, r = rng(1);
+  const sc = document.createElement('canvas'); sc.width = W + 2 * M; sc.height = H + 2 * M; const g = sc.getContext('2d');
+  g.fillStyle = 'rgb(40,50,80)'; g.fillRect(0, 0, sc.width, sc.height);
+  for (let k = 0; k < 14; k++) { const xx = r() * W, yy = r() * H, rr = 30 + r() * 90; g.fillStyle = `rgb(${60 + r() * 195 | 0},${60 + r() * 195 | 0},${60 + r() * 195 | 0})`; g.fillRect(xx, yy, rr * 2, rr); }
+  g.fillStyle = 'rgb(240,230,200)'; g.font = 'bold 64px sans-serif'; g.fillText('NOITE 123', 200, 360);
+  g.fillStyle = 'rgb(255,255,220)'; g.beginPath(); g.arc(1050, 130, 30, 0, 7); g.fill();
+  const base = g.getImageData(0, 0, sc.width, sc.height).data;
+  const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
+  const out = x.createImageData(W, H), d = out.data;
+  /* ruído gaussiano pré-calculado (rápido) */
+  const NZ = 1 << 20, noise = new Float32Array(NZ); for (let k = 0; k < NZ; k += 2) { const u = Math.max(1e-9, r()), v = r(), m = Math.sqrt(-2 * Math.log(u)); noise[k] = m * Math.cos(6.2832 * v) * 5; noise[k + 1] = m * Math.sin(6.2832 * v) * 5; }
+  const dark = +(q.get('dark') || 0.3);
+  window.cleanScene = () => { const cc = document.createElement('canvas'); cc.width = W; cc.height = H; cc.getContext('2d').drawImage(sc, M, M, W, H, 0, 0, W, H); return cc.toDataURL('image/png'); };
+  return { count: 240, async frame(i) {
+    const jx = Math.round(2.5 * Math.sin(i * 0.7)), jy = Math.round(2 * Math.cos(i * 0.53));
+    const bx = (i * 25) % W; let o = (i * 7919) % NZ;
+    for (let y = 0; y < H; y++) {
+      const sy = (y + M + jy) * sc.width;
+      for (let xx = 0; xx < W; xx++) {
+        const si = (sy + xx + M + jx) * 4, di = (y * W + xx) * 4;
+        let R = base[si], G = base[si + 1], B = base[si + 2];
+        const dx = xx - bx, dy = y - 560; if (dx * dx + dy * dy < 1600) { R = 255; G = 80; B = 60; }
+        d[di] = R * dark + noise[o]; d[di + 1] = G * dark + noise[(o + 1) % NZ]; d[di + 2] = B * dark + noise[(o + 2) % NZ]; d[di + 3] = 255;
+        o = (o + 3) % NZ;
+      }
+    }
+    x.putImageData(out, 0, 0);
+    return jpeg(c, 0.9);
+  } };
+};
+
+/* Retrato: pessoa real (vídeo de demonstração do MediaPipe, Apache 2.0) em 1280×720.
+   Os quadros são decodificados pelo próprio navegador. */
+GEN['portrait'] = async () => {
+  const c = document.createElement('canvas'); c.width = 1280; c.height = 720; const x = c.getContext('2d');
+  const frames = [];
+  /* drawImage é síncrono no callback; a compressão JPEG fica para depois */
+  const raw = [];
+  await decodeFrames('media/selfie_mediapipe.webm', v => { x.drawImage(v, 0, 0, 1280, 720); raw.push(x.getImageData(0, 0, 1280, 720)); });
+  for (const im of raw) { x.putImageData(im, 0, 0); frames.push(await jpeg(c, 0.9)); }
+  raw.length = 0;
+  return { count: frames.length, async frame(i) { return frames[i]; } };
+};
+
+window.GEN = GEN;
+window.startGen = async name => { window.__gen = await GEN[name](); return window.__gen.count; };
+window.genFrame = i => window.__gen.frame(i);
+window.__ready = true;
+</script></body></html>

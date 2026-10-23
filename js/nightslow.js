@@ -38,10 +38,10 @@
   }
 
   /* ganho para a prévia: alvo de luminância média ≈ 0,40; limitado a 3× */
-  function liveGain(video) {
+  function liveGain(video, maxGain) {
     const st = sceneStats(video);
     if (!st) return smoothGain;
-    const target = Math.min(3, Math.max(1, 102 / Math.max(st.mean, 4)));
+    const target = Math.min(maxGain || 3, Math.max(1, 102 / Math.max(st.mean, 4)));
     smoothGain += (target - smoothGain) * 0.35;
     return smoothGain;
   }
@@ -116,6 +116,14 @@
 
   /* grab: desenha o quadro atual no ctx (já com recorte de zoom e espelhamento) */
   async function capture(opts) {
+    /* congela a prévia ao vivo durante a captura (libera o processador) */
+    const live = NL.on;
+    if (live) suspendLive();
+    try { return await captureStack(opts); }
+    finally { if (live) resumeLive(); }
+  }
+
+  async function captureStack(opts) {
     const { video, ctx, w, h, grab, onProgress } = opts;
     const st = sceneStats(video) || { mean: 60 };
     /* cenas mais escuras → mais quadros */
@@ -224,7 +232,199 @@
     }
   }
 
-  root.GSNight = { liveGain, capture, sceneStats, resetGain: () => { smoothGain = 1; } };
+  /* ═════════════ NOITE — PRÉVIA COM REDUÇÃO DE RUÍDO AO VIVO (WebGL) ═════════════
+     Passo 1 (temporal): cada pixel guarda uma média acumulada dos quadros e
+       quantos quadros ela representa (até 16). Onde a imagem muda mais do que
+       o ruído esperado (algo se moveu), a média recomeça do quadro atual — sem
+       rastro. Em áreas paradas o ruído cai ≈ √N.
+     Passo 2 (espacial + tons): filtro bilateral 5×5 (suaviza o ruído que
+       sobrou sem borrar bordas, mais forte onde há poucos quadros acumulados)
+       e a mesma curva de ganho/altas luzes da foto noturna.
+     Precisa de WebGL2 com textura de ponto flutuante (ou WebGL1 com half-float);
+     sem isso o app volta ao clareamento simples por CSS. */
+  const NL = { gl: null, ok: null, canvas: null, video: null, raf: 0, vfc: 0, on: false, w: 0, h: 0, ping: 0, frames: 0, gain: 1, sigma: 4, lastT: -1 };
+  const VSF = 'attribute vec2 p;varying vec2 uv;void main(){uv=vec2(p.x*.5+.5,p.y*.5+.5);gl_Position=vec4(p,0.,1.);}';
+  /* temporal: cur (vídeo), acc (rgb = média, a = nº de quadros/16) */
+  const FS_T = [
+    'precision highp float;varying vec2 uv;uniform sampler2D cur;uniform sampler2D acc;uniform vec2 px;uniform float sig;uniform float first;',
+    'float L(vec3 c){return dot(c,vec3(.299,.587,.114));}',
+    'void main(){',
+    ' vec3 c=texture2D(cur,uv).rgb; vec4 a=texture2D(acc,uv);',
+    ' if(first>.5){gl_FragColor=vec4(c,1./16.);return;}',
+    ' float bc=0.,ba=0.;',
+    ' for(int j=-1;j<=1;j++)for(int i=-1;i<=1;i++){vec2 o=vec2(float(i),float(j))*px; bc+=L(texture2D(cur,uv+o).rgb); ba+=L(texture2D(acc,uv+o).rgb);}',
+    ' float d=abs(bc-ba)/9.*255.;',                                   /* diferença da média 3×3 (σ do ruído cai 3×) */
+    ' float m=smoothstep(sig*1.2,sig*3.5,d);',                         /* 0 = parado, 1 = movimento */
+    ' float n=a.a*16.; n=mix(min(n+1.,16.),1.,m);',
+    ' gl_FragColor=vec4(mix(a.rgb,c,1./n),n/16.);}'
+  ].join('\n');
+  /* exibição: bilateral 5×5 + ganho com ombro nas altas luzes (igual à foto) */
+  const FS_D = [
+    'precision highp float;varying vec2 uv;uniform sampler2D acc;uniform vec2 px;uniform float gain;uniform float sig;',
+    'float L(vec3 c){return dot(c,vec3(.299,.587,.114));}',
+    'float sh(float v){return v<.78?v:.78+.22*(1.-exp(-(v-.78)/.22));}',
+    'void main(){',
+    ' vec4 c0=texture2D(acc,uv); float n=max(1.,c0.a*16.);',
+    ' float rs=max(1.5,sig*2.2/sqrt(n))/255.;',                          /* faixa do bilateral = ruído restante */
+    ' vec3 s=vec3(0.); float ws=0.;',
+    ' for(int j=-2;j<=2;j++)for(int i=-2;i<=2;i++){',
+    '  vec3 q=texture2D(acc,uv+vec2(float(i),float(j))*px).rgb; vec3 dq=q-c0.rgb;',
+    '  float w=exp(-float(i*i+j*j)/4.5-dot(dq,dq)/(2.*rs*rs*3.));',
+    '  s+=q*w; ws+=w;}',
+    ' vec3 c=s/ws; float l=L(c);',
+    ' float lo=pow(sh(l*gain),.92);',
+    ' float k=l>.002?lo/l:gain; float sat=l<.12?.75+l*2.:1.;',
+    ' vec3 o=lo+(c-l)*k*sat;',
+    ' gl_FragColor=vec4(clamp(o,0.,1.),1.);}'
+  ].join('\n');
+
+  function nlInit(canvas) {
+    let gl = canvas.getContext('webgl2', { premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true });
+    let fmt = null;
+    if (gl && gl.getExtension('EXT_color_buffer_float')) fmt = { internal: gl.RGBA16F, type: gl.HALF_FLOAT };
+    if (!fmt) {
+      gl = canvas.getContext('webgl', { premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true });
+      const hf = gl && gl.getExtension('OES_texture_half_float');
+      if (gl && hf && gl.getExtension('EXT_color_buffer_half_float')) fmt = { internal: gl.RGBA, type: hf.HALF_FLOAT_OES };
+    }
+    if (!gl || !fmt) return false;
+    const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+    const prog = (vs, fs, names) => {
+      const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+      const loc = {}; for (const n of names) loc[n] = gl.getUniformLocation(p, n);
+      return { p, loc, ap: gl.getAttribLocation(p, 'p') };
+    };
+    NL.pt = prog(VSF, FS_T, ['cur', 'acc', 'px', 'sig', 'first']);
+    NL.pd = prog(VSF, FS_D, ['acc', 'px', 'gain', 'sig']);
+    NL.buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, NL.buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const tex = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+    NL.cur = tex();
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);   /* reduz o vídeo ao enviar */
+    NL.acc = [tex(), tex()]; NL.fb = [gl.createFramebuffer(), gl.createFramebuffer()];
+    NL.fmt = fmt; NL.gl = gl; NL.tex = tex;
+    return true;
+  }
+
+  function nlAlloc(w, h) {
+    const gl = NL.gl;
+    for (let k = 0; k < 2; k++) {
+      gl.bindTexture(gl.TEXTURE_2D, NL.acc[k]);
+      gl.texImage2D(gl.TEXTURE_2D, 0, NL.fmt.internal, w, h, 0, gl.RGBA, NL.fmt.type, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, NL.fb[k]);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, NL.acc[k], 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('framebuffer de ponto flutuante indisponível');
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    NL.w = w; NL.h = h; NL.frames = 0;
+  }
+
+  function nlDraw(prog) {
+    const gl = NL.gl;
+    gl.useProgram(prog.p);
+    gl.bindBuffer(gl.ARRAY_BUFFER, NL.buf);
+    gl.enableVertexAttribArray(prog.ap); gl.vertexAttribPointer(prog.ap, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  /* processa um quadro novo do vídeo */
+  function nlStep() {
+    const v = NL.video, gl = NL.gl;
+    if (!NL.on || !v || !v.videoWidth || v.readyState < 2) return;
+    /* resolução de trabalho: até 960 px no lado maior (prévia) */
+    const sc = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
+    const w = Math.round(v.videoWidth * sc), h = Math.round(v.videoHeight * sc);
+    if (w !== NL.w || h !== NL.h) { nlAlloc(w, h); NL.canvas.width = w; NL.canvas.height = h; }
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, NL.cur);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);      /* textura na orientação do GL (como os framebuffers) */
+    try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v); } catch (e) { stopLive(); return; }
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    const src = NL.ping, dst = 1 - NL.ping;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, NL.fb[dst]); gl.viewport(0, 0, w, h);
+    gl.useProgram(NL.pt.p);
+    gl.uniform1i(NL.pt.loc.cur, 0); gl.uniform1i(NL.pt.loc.acc, 1);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, NL.acc[src]);
+    gl.uniform2f(NL.pt.loc.px, 1 / w, 1 / h);
+    gl.uniform1f(NL.pt.loc.sig, NL.sigma);
+    gl.uniform1f(NL.pt.loc.first, NL.frames === 0 ? 1 : 0);
+    nlDraw(NL.pt);
+    NL.ping = dst; NL.frames++;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, w, h);
+    gl.useProgram(NL.pd.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, NL.acc[dst]);
+    gl.uniform1i(NL.pd.loc.acc, 0);
+    gl.uniform2f(NL.pd.loc.px, 1 / w, 1 / h);
+    gl.uniform1f(NL.pd.loc.gain, NL.gain);
+    gl.uniform1f(NL.pd.loc.sig, NL.sigma);
+    nlDraw(NL.pd);
+  }
+
+  function nlLoop() {
+    NL.raf = 0;
+    if (!NL.on) return;
+    const v = NL.video;
+    /* só processa quando chega um quadro novo (sem requestVideoFrameCallback: compara o tempo) */
+    if (!v.requestVideoFrameCallback && v.currentTime !== NL.lastT) { NL.lastT = v.currentTime; nlStep(); }
+    NL.raf = requestAnimationFrame(nlLoop);
+  }
+  function nlOnFrame() {
+    if (!NL.on) return;
+    nlStep();
+    NL.vfc = NL.video.requestVideoFrameCallback(nlOnFrame);
+  }
+
+  /* mede ganho da cena e o ruído (diferença entre quadros) na CPU, 4× por segundo */
+  let nlProbe = null;
+  const prevSmall = new Uint8Array(48 * 27);
+  function nlMeasure() {
+    if (!NL.on) return;
+    NL.gain = liveGain(NL.video, 5);
+    try {
+      px.drawImage(NL.video, 0, 0, 48, 27);
+      const d = px.getImageData(0, 0, 48, 27).data, hd = new Uint32Array(64);
+      for (let i = 0, j = 0; j < prevSmall.length; i += 4, j++) { const g = d[i + 1]; hd[Math.min(63, Math.abs(g - prevSmall[j]))]++; prevSmall[j] = g; }
+      /* mediana da diferença entre quadros reduzidos (≈ ruído; o vídeo reduzido já é suavizado) */
+      let acc = 0, med = 0; for (let v = 0; v < 64; v++) { acc += hd[v]; if (acc >= prevSmall.length / 2) { med = v; break; } }
+      NL.sigma += (Math.min(10, Math.max(2, 2 + med * 1.5)) - NL.sigma) * 0.3;
+    } catch (e) { /* vídeo ainda sem quadro */ }
+  }
+
+  function startLive(canvas, video) {
+    if (NL.ok === null || NL.canvas !== canvas) {
+      NL.canvas = canvas;
+      try { NL.ok = nlInit(canvas); } catch (e) { console.warn('Noite ao vivo:', e); NL.ok = false; }
+    }
+    if (!NL.ok) return false;
+    NL.video = video; NL.on = true; NL.frames = 0; NL.lastT = -1;
+    smoothGain = 1; NL.gain = liveGain(video, 5);
+    canvas.classList.remove('hidden');
+    clearInterval(nlProbe); nlProbe = setInterval(nlMeasure, 250);
+    if (video.requestVideoFrameCallback) NL.vfc = video.requestVideoFrameCallback(nlOnFrame);
+    else if (!NL.raf) NL.raf = requestAnimationFrame(nlLoop);
+    return true;
+  }
+  function suspendLive() {
+    NL.on = false;
+    if (NL.raf) cancelAnimationFrame(NL.raf); NL.raf = 0;
+    if (NL.vfc && NL.video && NL.video.cancelVideoFrameCallback) NL.video.cancelVideoFrameCallback(NL.vfc); NL.vfc = 0;
+  }
+  function resumeLive() {
+    if (!NL.video || !NL.canvas || NL.canvas.classList.contains('hidden')) return;
+    NL.on = true; NL.frames = 0;      /* recomeça o acúmulo (a cena pode ter mudado) */
+    if (NL.video.requestVideoFrameCallback) NL.vfc = NL.video.requestVideoFrameCallback(nlOnFrame);
+    else if (!NL.raf) NL.raf = requestAnimationFrame(nlLoop);
+  }
+  function stopLive() {
+    NL.on = false;
+    clearInterval(nlProbe); nlProbe = null;
+    if (NL.raf) cancelAnimationFrame(NL.raf); NL.raf = 0;
+    if (NL.vfc && NL.video && NL.video.cancelVideoFrameCallback) NL.video.cancelVideoFrameCallback(NL.vfc); NL.vfc = 0;
+    if (NL.canvas) NL.canvas.classList.add('hidden');
+  }
+
+  root.GSNight = { liveGain, capture, sceneStats, resetGain: () => { smoothGain = 1; },
+    startLive, stopLive, liveActive: () => NL.on, _live: NL };
 
   /* ═════════════ SLOW-MO ═════════════ */
   async function prepare(track) {

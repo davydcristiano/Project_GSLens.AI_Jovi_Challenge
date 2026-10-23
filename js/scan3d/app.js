@@ -7,12 +7,12 @@
    - iniciar / pausar / cancelar / reiniciar
    - processamento com progresso e cancelamento
    - tela de resultado (visualizador) e exportação
-   Integra-se ao script.js via window.GSApp.
+   Integra-se ao app (js/app/main.js) via window.GSApp.
 ═══════════════════════════════════════════════════ */
 (function (root) {
   'use strict';
   const GS3D = root.GS3D;
-  const M = GS3D.math, B = GS3D.board;
+  const M = GS3D.math, B = GS3D.board, S3 = GS3D.surface, F = GS3D.features;
   const $ = id => document.getElementById(id);
 
   const LIVE_MAX = 640;          /* resolução de rastreamento ao vivo */
@@ -33,8 +33,13 @@
     fLive: null, liveDims: null, Hhist: [],
     hint: '', cancelProcessing: false,
     result: null, viewer: null,
-    detectFails: 0
+    detectFails: 0,
+    /* modo: 'board' (prancha impressa) ou 'surface' (sem prancha: mesa com textura) */
+    mode: (function () { try { return localStorage.getItem('gs3d-mode') === 'surface' ? 'surface' : 'board'; } catch (e) { return 'board'; } })(),
+    surf: null          /* { live, kf, refBig, liveW, kfW, f, ax, ay, lastPts } */
   };
+  const isSurf = () => S.mode === 'surface';
+  const volume = () => isSurf() ? S3.VOLUME : B.VOLUME;
 
   /* ───────── utilidades de UI ───────── */
   function setStatus(msg, kind) {
@@ -67,7 +72,12 @@
     }
     const ready = n >= MIN_KF && cov.azSet.size >= AZ_BINS / 2;
     const set = (id, en) => { const b = $(id); if (b) b.disabled = !en; };
-    set('scanStartBtn', st === 'idle' || st === 'paused');
+    set('scanStartBtn', (st === 'idle' || st === 'paused') && (!isSurf() || !!(S.surf && S.surf.refBig)));
+    set('scanRefBtn', st === 'idle' && S.active);
+    const rb = $('scanRefBtn');
+    if (rb) rb.textContent = S.surf && S.surf.refBig ? '📷 Refazer mesa' : '📷 Mesa vazia';
+    document.querySelectorAll('.scan-mode-opt').forEach(b => { const on = b.dataset.mode === S.mode; b.classList.toggle('active', on); b.setAttribute('aria-pressed', on ? 'true' : 'false'); b.disabled = st === 'scanning' || st === 'processing' || (st === 'paused' && S.keyframes.length > 0); });
+    const panel = $('scanPanel'); if (panel) panel.classList.toggle('surface-mode', isSurf());
     set('scanPauseBtn', st === 'scanning');
     set('scanCancelBtn', st === 'scanning' || st === 'paused');
     set('scanRestartBtn', (st === 'scanning' || st === 'paused') && n > 0);
@@ -135,6 +145,7 @@
     ensureCanvases();
     const fr = grabFrame(video, LIVE_MAX, S.liveCanvas, S.liveCtx);
     if (!fr) { drawOverlay(null); setStatus('Aguardando a imagem da câmera…'); return; }
+    if (isSurf()) { trackSurface(video, fr); return; }
     const det = S.tracker.detect(fr.img, { minMarkers: 4 });
     if (!det.ok) {
       S.detectFails++;
@@ -150,32 +161,38 @@
     const K = liveK(fr.w, fr.h);
     const pose = GS3D.tracking.solvePose(det, K);
     if (!pose) return;
+    S.lastDet = det;
+    afterPose(video, fr, K, pose, { det, nUsed: det.used.length });
+  }
+
+  /* comum aos dois modos, depois que a pose da câmera é conhecida */
+  function afterPose(video, fr, K, pose, info) {
+    const det = info.det;
     const C = pose.C;
     const horiz = Math.hypot(C[0], C[1]);
     const el = Math.atan2(C[2], horiz) * 180 / Math.PI;
     const az = (Math.atan2(C[1], C[0]) * 180 / Math.PI + 360) % 360;
-    /* velocidade da câmera em mm/s (independe da taxa de rastreamento) */
     const now = performance.now();
     const speed = S.lastC && S.lastT ? Math.hypot(C[0] - S.lastC[0], C[1] - S.lastC[1], C[2] - S.lastC[2]) / Math.max(0.03, (now - S.lastT) / 1000) : 0;
-    S.lastC = C; S.lastT = now; S.lastDet = det; S.lastPose = pose;
-
+    S.lastC = C; S.lastT = now; S.lastPose = pose;
     /* volume inteiro visível? */
-    const V = B.VOLUME;
+    const V = volume();
     let inside = true;
     for (const x of [V.xmin, V.xmax]) for (const y of [V.ymin, V.ymax]) for (const z of [V.zmin, V.zmax]) {
       const q = M.project(K, pose.R, pose.t, [x, y, z]);
       if (!(q[2] > 0) || q[0] < -0.02 * fr.w || q[1] < -0.02 * fr.h || q[0] > fr.w * 1.02 || q[1] > fr.h * 1.02) inside = false;
     }
     let hint = '';
-    if (det.used.length < 6) hint = 'Poucos marcadores visíveis — enquadre a folha inteira.';
+    if (!isSurf() && info.nUsed < 6) hint = 'Poucos marcadores visíveis — enquadre a folha inteira.';
+    else if (isSurf() && info.inliers < 30) hint = 'Pouca textura da mesa à vista — mostre mais da superfície ao redor do objeto.';
     else if (!inside) hint = 'Afaste um pouco a câmera: o volume de escaneamento precisa caber na tela.';
     else if (el < 12) hint = 'Câmera muito baixa — eleve um pouco o ângulo.';
     else if (speed > 180) hint = 'Mova mais devagar para evitar imagem tremida.';
     S.hint = hint;
 
     let captured = false;
-    if (S.state === 'scanning' && !hint) captured = maybeCapture(video, { az, el, C });
-    drawOverlay({ fr, det, pose, K, az, el, ok: !hint });
+    if (S.state === 'scanning' && !hint) captured = maybeCapture(video, { az, el, C, H: info.H });
+    drawOverlay({ fr, det, pose, K, az, el, ok: !hint, points: info.points });
 
     if (S.state === 'scanning') {
       const cov = coverage();
@@ -193,8 +210,90 @@
     } else if (S.state === 'paused') {
       setStatus('Escaneamento pausado (' + S.keyframes.length + ' vistas). Toque em "Retomar" ou "Gerar 3D".');
     } else if (S.state === 'idle') {
-      setStatus(hint || 'Prancha detectada ✓ Coloque o objeto no quadrado central e toque em "Iniciar".', hint ? 'warn' : 'ok');
+      setStatus(hint || (isSurf() ? 'Mesa registrada ✓ Coloque o objeto dentro da caixa marcada e toque em "Iniciar".' : 'Prancha detectada ✓ Coloque o objeto no quadrado central e toque em "Iniciar".'), hint ? 'warn' : 'ok');
     }
+  }
+
+  /* ───────── modo sem prancha ───────── */
+  function trackSurface(video, fr) {
+    const su = S.surf;
+    if (!su || !su.refBig) {
+      drawOverlay(null);
+      if (S.state === 'idle') setStatus('Sem prancha: aponte a câmera de cima para a mesa VAZIA (com textura: madeira, toalha estampada, revista…) e toque em "📷 Mesa vazia".');
+      return;
+    }
+    if (su.liveW !== fr.w) { setStatus('A resolução da câmera mudou — fotografe a mesa vazia novamente.', 'warn'); resetSurface(); return; }
+    const r = su.live.track(fr.img);
+    if (!r.ok) {
+      S.lastPose = null; S.lastC = null;
+      drawOverlay({ fr, det: null });
+      if (r.lost) setStatus('Rastreamento da mesa perdido — volte a enquadrar a mesa como na foto inicial e mova mais devagar.', 'warn');
+      return;
+    }
+    /* pose: H (referência→quadro) · A (mesa→referência), com a calibração atual */
+    const K = M.kForImage(su.f * fr.w / su.kfW, fr.w, fr.h);
+    const A = S3.planeToRef(K, su.ax, su.ay);
+    const G = M.mul3(r.H, A);
+    const p0 = M.poseFromHomography(G, K);
+    if (!p0) return;
+    const pose = { R: p0.R, t: p0.t, C: M.cameraCenter(p0.R, p0.t) };
+    S.lastDet = null;
+    const pts = r.matches.map(m => [m[1], m[2]]);
+    afterPose(video, fr, K, pose, { inliers: r.inliers, H: r.H, points: pts });
+  }
+
+  function resetSurface() {
+    S.surf = null;
+    refreshUI();
+  }
+
+  /* fotografa a mesa vazia (referência) */
+  function captureReference() {
+    if (!S.active || S.state !== 'idle') return;
+    const video = $('video');
+    ensureCanvases();
+    const fr = grabFrame(video, LIVE_MAX, S.liveCanvas, S.liveCtx);
+    const big = fr && grabFrame(video, KF_MAX, S.kfCanvas, S.kfCtx);
+    if (!fr || !big) { setStatus('Aguardando a imagem da câmera…', 'warn'); return; }
+    const live = new S3.SurfaceTracker(), kf = new S3.SurfaceTracker();
+    const a = live.setReference(fr.img), b = kf.setReference(big.img);
+    if (!a.ok || !b.ok) { setStatus('⚠️ ' + (a.reason || b.reason), 'warn'); toast('⚠️ Superfície com pouca textura'); return; }
+    clearKeyframes();
+    const md = Math.max(big.w, big.h);
+    S.surf = { live, kf, refBig: big.img, liveW: fr.w, kfW: big.w, f: 0.82 * md, ax: 0, ay: 0, calibN: 0 };
+    const vf = $('flashOverlay');
+    if (vf) { vf.classList.remove('flash'); void vf.offsetWidth; vf.classList.add('flash', 'soft'); setTimeout(() => vf.classList.remove('flash', 'soft'), 350); }
+    toast('📷 Mesa registrada (' + b.n + ' pontos de textura)');
+    setStatus('Mesa registrada ✓ Coloque o objeto dentro da caixa marcada e toque em "Iniciar".', 'ok');
+    refreshUI();
+  }
+
+  /* recalibra a focal/inclinação com as vistas já capturadas (melhora a sobreposição AR e a cobertura) */
+  function liveCalibrate() {
+    const su = S.surf;
+    if (!su || S.keyframes.length < 8 || S.keyframes.length - su.calibN < 4) return;
+    su.calibN = S.keyframes.length;
+    setTimeout(() => {
+      try {
+        const kb = S.keyframes[0];
+        const z = S3.calibrateZhang(S.keyframes.map(k => k.H), kb.w, kb.h, { f: su.f, tilt: [su.ax, su.ay] });
+        if (z.cost < 0.01) { su.f = z.f; su.ax = z.ax; su.ay = z.ay; }
+      } catch (e) { console.warn('Calibração ao vivo:', e); }
+    }, 0);
+  }
+
+  function setScanMode(mode) {
+    if (mode !== 'board' && mode !== 'surface') return;
+    if (S.state === 'scanning' || S.state === 'processing' || (S.state === 'paused' && S.keyframes.length)) { toast('Termine ou cancele o escaneamento atual antes de trocar o modo.'); return; }
+    S.mode = mode;
+    try { localStorage.setItem('gs3d-mode', mode); } catch (e) { }
+    if (mode === 'board' && !S.tracker) { try { S.tracker = new GS3D.Tracker(); } catch (e) { setStatus('⚠️ ' + e.message, 'err'); } }
+    clearKeyframes();
+    S.state = 'idle';
+    S.lastPose = null; S.lastC = null; S.detectFails = 0;
+    if (mode === 'board') setStatus('Aponte a câmera para a prancha impressa (folha A4 com marcadores).');
+    else setStatus(S.surf && S.surf.refBig ? 'Mesa registrada ✓ Coloque o objeto dentro da caixa marcada e toque em "Iniciar".' : 'Sem prancha: aponte a câmera de cima para a mesa VAZIA e toque em "📷 Mesa vazia".');
+    refreshUI();
   }
 
   function maybeCapture(video, info) {
@@ -210,6 +309,21 @@
     /* quadro-chave em resolução maior, com nova detecção (mais precisa) */
     const fr = grabFrame(video, KF_MAX, S.kfCanvas, S.kfCtx);
     if (!fr) return false;
+    if (isSurf()) {
+      const su = S.surf, k = fr.w / su.liveW, Sm = [k, 0, 0, 0, k, 0, 0, 0, 1], Si = [1 / k, 0, 0, 0, 1 / k, 0, 0, 0, 1];
+      const rk = su.kf.refineImage(fr.img, M.mul3(Sm, M.mul3(info.H, Si)));
+      if (!rk || rk.inliers < 25) return false;
+      const g = F.gray(fr.img);
+      const sharp = GS3D.tracking.sharpness({ width: g.w, height: g.h, data: g.d });
+      if (S.sharpRef.length >= 3 && sharp < 0.45 * M.median(S.sharpRef)) { S.hint = 'Imagem tremida — segure firme por um instante.'; return false; }
+      S.sharpRef.push(sharp);
+      if (S.sharpRef.length > 15) S.sharpRef.shift();
+      S.keyframes.push({ rgba: fr.img.data, w: fr.w, h: fr.h, H: rk.H, matches: rk.matches, az: info.az, el: info.el, dir });
+      flashSoft();
+      liveCalibrate();
+      refreshUI();
+      return true;
+    }
     const det = S.tracker.detect(fr.img, { minMarkers: 6 });
     if (!det.ok || det.used.length < 6 || det.meanErr > 2) return false;
     const sharp = GS3D.tracking.sharpness(S.tracker.detector.grey);
@@ -217,10 +331,13 @@
     S.sharpRef.push(sharp);
     if (S.sharpRef.length > 15) S.sharpRef.shift();
     S.keyframes.push({ rgba: fr.img.data, w: fr.w, h: fr.h, det, az: info.az, el: info.el, dir });
-    const vf = $('flashOverlay');
-    if (vf) { vf.classList.remove('flash'); void vf.offsetWidth; vf.classList.add('flash', 'soft'); setTimeout(() => vf.classList.remove('flash', 'soft'), 350); }
+    flashSoft();
     refreshUI();
     return true;
+  }
+  function flashSoft() {
+    const vf = $('flashOverlay');
+    if (vf) { vf.classList.remove('flash'); void vf.offsetWidth; vf.classList.add('flash', 'soft'); setTimeout(() => vf.classList.remove('flash', 'soft'), 350); }
   }
 
   /* ───────── sobreposição AR ───────── */
@@ -253,9 +370,13 @@
       m.img.forEach((p, i) => { const q = toScreen(p); if (i) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]); });
       ctx.closePath(); ctx.stroke();
     }
+    if (o.points) {
+      ctx.fillStyle = 'rgba(0,229,255,.7)';
+      for (let k = 0; k < o.points.length; k += 2) { const q = toScreen(o.points[k]); ctx.fillRect(q[0] - 1.5 * dpr, q[1] - 1.5 * dpr, 3 * dpr, 3 * dpr); }
+    }
     if (!o.pose) return;
     const P = X => { const q = M.project(o.K, o.pose.R, o.pose.t, X); return q[2] > 0 ? toScreen(q) : null; };
-    const V = B.VOLUME;
+    const V = volume();
     /* anel de cobertura no plano da prancha */
     const cov = coverage();
     const r0 = 64, r1 = 74;
@@ -297,7 +418,7 @@
     const probs = [];
     if (!root.isSecureContext && location.protocol !== 'file:') probs.push('A câmera exige HTTPS (ou localhost). Abra o sistema por um endereço seguro.');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) probs.push('Este navegador não permite acesso à câmera.');
-    if (!root.AR || !root.AR.Detector) probs.push('A biblioteca de rastreamento de marcadores não foi carregada.');
+    if (!isSurf() && (!root.AR || !root.AR.Detector)) probs.push('A biblioteca de rastreamento de marcadores não foi carregada.');
     try { document.createElement('canvas').getContext('2d').getImageData(0, 0, 1, 1); } catch (e) { probs.push('O navegador bloqueia a leitura de pixels da câmera.'); }
     return probs;
   }
@@ -307,11 +428,11 @@
     const probs = checkSupport();
     if (probs.length) { setStatus('⚠️ ' + probs.join(' '), 'err'); refreshUI(); return; }
     if (!root.GSApp.getStream()) { setStatus('⚠️ Câmera indisponível. Volte e permita o acesso à câmera.', 'err'); refreshUI(); return; }
-    try { if (!S.tracker) S.tracker = new GS3D.Tracker(); }
+    try { if (!S.tracker && !isSurf()) S.tracker = new GS3D.Tracker(); }
     catch (e) { setStatus('⚠️ ' + e.message, 'err'); return; }
     root.GSApp.resetZoom();
     if (S.state === 'scanning') S.state = 'paused';
-    setStatus('Aponte a câmera para a prancha impressa (folha A4 com marcadores).');
+    setStatus(isSurf() ? 'Sem prancha: aponte a câmera de cima para a mesa VAZIA e toque em "📷 Mesa vazia".' : 'Aponte a câmera para a prancha impressa (folha A4 com marcadores).');
     refreshUI();
     if (!S.loopTimer) tick();
   }
@@ -331,6 +452,7 @@
     clearKeyframes();
     if (S.state !== 'processing') S.state = 'idle';
     S.liveDims = null; S.Hhist = [];
+    S.surf = null;
     refreshUI();
   }
 
@@ -342,9 +464,10 @@
   function start() {
     if (!S.active) return;
     if (!root.GSApp.getStream()) { setStatus('⚠️ Câmera indisponível.', 'err'); return; }
+    if (isSurf() && !(S.surf && S.surf.refBig)) { setStatus('Primeiro fotografe a mesa vazia ("📷 Mesa vazia").', 'warn'); return; }
     if (S.state === 'idle') clearKeyframes();
     S.state = 'scanning';
-    setStatus('Escaneando… contorne o objeto devagar, mantendo a folha inteira na tela.', 'ok');
+    setStatus(isSurf() ? 'Escaneando… contorne o objeto devagar, mostrando a mesa ao redor dele.' : 'Escaneando… contorne o objeto devagar, mantendo a folha inteira na tela.', 'ok');
     refreshUI();
   }
   function pause() { if (S.state === 'scanning') { S.state = 'paused'; refreshUI(); setStatus('Escaneamento pausado.'); } }
@@ -370,6 +493,7 @@
   function onCameraChanged() {
     /* outra câmera = outra óptica: as vistas anteriores deixam de ser válidas */
     S.liveDims = null; S.Hhist = [];
+    if (S.surf) { S.surf = null; toast('Câmera trocada — fotografe a mesa vazia novamente.'); }
     if (S.keyframes.length) { clearKeyframes(); toast('Câmera trocada — vistas anteriores descartadas.'); }
     if (S.state === 'scanning' || S.state === 'paused') S.state = 'idle';
     refreshUI();
@@ -396,6 +520,7 @@
   async function build() {
     if (S.state === 'processing') return;
     if (S.keyframes.length < MIN_KF) { setStatus('Capture pelo menos ' + MIN_KF + ' vistas ao redor do objeto.', 'warn'); return; }
+    if (isSurf() && !(S.surf && S.surf.refBig)) { setStatus('Fotografe a mesa vazia antes de escanear.', 'warn'); return; }
     const prev = S.state;
     S.state = 'processing';
     S.cancelProcessing = false;
@@ -410,9 +535,11 @@
     const t0 = performance.now();
     try {
       const kfW = S.keyframes[0].w, liveW = S.liveDims ? S.liveDims[0] : kfW;
+      const su = isSurf() ? S.surf : null;
       const res = await GS3D.pipeline.buildModel(S.keyframes, {
         resolution: +(($('scanQuality') && $('scanQuality').value) || 96),
-        fGuess: S.fLive ? S.fLive * kfW / liveW : null
+        fGuess: su ? su.f : (S.fLive ? S.fLive * kfW / liveW : null),
+        surface: su ? { ref: { rgba: su.refBig.data, w: su.refBig.width, h: su.refBig.height }, refPts: su.kf.ref.pts, tilt: [su.ax, su.ay], volume: S3.VOLUME } : null
       }, (stage, f) => {
         const d = STAGES[stage]; if (!d) return;
         procUpdate(d[0], d[1] + (d[2] - d[1]) * f);
@@ -445,7 +572,8 @@
     const r = S.result; if (!r) return;
     const s = r.stats, z = s.sizeMm;
     const rows = [
-      ['Dimensões (L × P × A)', z[0].toFixed(1) + ' × ' + z[1].toFixed(1) + ' × ' + z[2].toFixed(1) + ' mm'],
+      ['Dimensões (L × P × A)', (s.approxScale ? '≈ ' : '') + z[0].toFixed(1) + ' × ' + z[1].toFixed(1) + ' × ' + z[2].toFixed(1) + ' mm'],
+      ['Modo', s.mode === 'surface' ? (s.scaleFixed ? 'Sem prancha · escala corrigida por medida real' : 'Sem prancha · escala aproximada') : 'Prancha impressa · escala real'],
       ['Malha', s.vertices.toLocaleString('pt-BR') + ' vértices · ' + s.triangles.toLocaleString('pt-BR') + ' triângulos'],
       ['Vistas usadas', s.views + ' de ' + s.captured],
       ['Erro de reprojeção', s.reprojRms.toFixed(2) + ' px (rastreamento)'],
@@ -454,6 +582,8 @@
       ['Tempo de processamento', (s.seconds || 0).toFixed(1) + ' s']
     ];
     $('scanStats').innerHTML = rows.map(([k, v]) => `<div class="stat-row"><span>${k}</span><strong>${v}</strong></div>`).join('');
+    const sc = $('scaleFix');
+    if (sc) sc.classList.toggle('hidden', s.mode !== 'surface');
     const warn = $('scanWarnings');
     warn.innerHTML = '';
     for (const w of r.warnings) { const li = document.createElement('li'); li.textContent = w; warn.appendChild(li); }
@@ -509,6 +639,22 @@
     }
   }
 
+  /* Sem prancha a escala é aproximada: o usuário informa uma medida real
+     (altura, largura ou profundidade) e o modelo inteiro é reescalado. */
+  function applyRealSize() {
+    const r = S.result; if (!r) return;
+    const axis = +$('scaleAxis').value, mm = parseFloat(String($('scaleValue').value).replace(',', '.'));
+    const cur = r.stats.sizeMm[axis];
+    if (!(mm > 0.5 && mm < 5000) || !(cur > 0)) { toast('Informe uma medida válida em milímetros.'); return; }
+    const k = mm / cur;
+    for (let i = 0; i < r.positions.length; i++) r.positions[i] *= k;
+    r.stats.sizeMm = r.stats.sizeMm.map(v => v * k);
+    r.stats.voxelMm *= k; r.stats.scaleFixed = true;
+    renderStats();
+    if (S.viewer) S.viewer.setModel(r);
+    toast('📏 Escala corrigida (×' + k.toFixed(3) + ')');
+  }
+
   /* ───────── exportação ───────── */
   function setExportMsg(msg, kind) {
     const el = $('exportMsg'); if (!el) return;
@@ -550,7 +696,8 @@
   root.Scan3D = {
     enter, exit, release, start, pause, cancel, restart, shutter, build, cancelBuild, closeProc,
     openResult, closeResult, scanAgain, viewerTool, exportModel, downloadBoard, showHelp, hideHelp,
-    onCameraChanged,
+    onCameraChanged, setScanMode, captureReference, applyRealSize,
+    get mode() { return S.mode; },
     get state() { return S.state; },
     _debug: S
   };

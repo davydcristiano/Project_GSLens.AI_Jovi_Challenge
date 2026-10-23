@@ -202,7 +202,8 @@ html{ scrollbar-color:var(--line) var(--bg); scrollbar-width:thin; }
   position:absolute; inset:0; width:100%; height:100%;
   object-fit:cover; transform:scaleX(-1); transition:filter .15s ease;
 }
-#filterCanvas{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); z-index:1; }
+#filterCanvas,#liveCanvas{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); z-index:2; }
+#liveCanvas{ z-index:1; }   /* Noite/Retrato processados ao vivo; o filtro de cor fica por cima */
 #fxCanvas,#scanCanvas,#linkCanvas{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; z-index:5; }
 #scanCanvas{ z-index:7; }
 #linkCanvas{ z-index:8; }
@@ -272,7 +273,7 @@ html{ scrollbar-color:var(--line) var(--bg); scrollbar-width:thin; }
    que os controles nunca sejam espremidos/cortados. */
 .cam-controls{ flex-shrink:0; display:flex; flex-direction:column; max-width:560px; width:100%; margin:0 auto; }
 
-.ev-strip,.zoom-strip{ flex-shrink:0; }
+.ev-strip,.zoom-strip,.portrait-strip{ flex-shrink:0; }
 .zl{ font-size:.7rem; color:var(--muted); font-family:var(--font-mono); flex-shrink:0; }
 .custom-range{ flex:1; }
 .custom-range::-webkit-slider-thumb{ background:var(--accent); }
@@ -831,7 +832,7 @@ body.theme-light .scan-viewer{ background:radial-gradient(circle at 50% 40%, #ff
   color:var(--muted); margin:6px 0 -2px; padding-bottom:4px; border-bottom:1px solid var(--line);
 }
 .grid-group:first-child{ margin-top:0; }
-#cameraScreen.mode-ar #filterCanvas{ display:none !important; }
+#cameraScreen.mode-ar #filterCanvas,#cameraScreen.mode-ar #liveCanvas{ display:none !important; }
 #cameraScreen.mode-ar #video{ filter:none !important; }
 
 /* ═══════════════════════
@@ -925,3 +926,27 @@ body.sheet-open{ overflow:hidden; }
 /* Modo Noite: obturador ocupado durante o empilhamento de quadros */
 .shutter.busy .shutter-inner{ background:var(--gold); transform:scale(.8); transition:transform .2s; }
 #camProc{ z-index:21; }
+
+/* Retrato: aviso de pessoa detectada / não detectada */
+.portrait-badge{
+  position:absolute; z-index:11; top:44px; left:50%; transform:translateX(-50%);
+  font-size:.68rem; font-weight:700; padding:4px 10px; border-radius:999px;
+  background:rgba(0,0,0,.55); color:#fff; border:1px solid var(--line); backdrop-filter:blur(6px); white-space:nowrap;
+}
+.portrait-badge.ok{ color:var(--gold); }
+#cameraScreen.mode-ar .portrait-strip{ display:none !important; }
+
+/* Scanner: modo com/sem prancha */
+.scan-modes{ display:flex; gap:6px; margin:4px 0 2px; }
+.scan-mode-opt{ flex:1; font-size:.7rem; padding:.3rem .4rem; border-radius:999px; border:1px solid var(--line); background:transparent; color:var(--muted); }
+.scan-mode-opt.active{ background:var(--accent); border-color:var(--accent); color:#04151a; font-weight:700; }
+.scan-mode-opt:disabled{ opacity:.5; }
+.scan-panel .surface-only{ display:none; }
+.scan-panel.surface-mode .surface-only{ display:inline-block; }
+.scan-panel.surface-mode .board-only{ display:none; }
+.scale-fix{ margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+.scale-fix-note{ font-size:.74rem; color:var(--muted); margin:0 0 6px; }
+.scale-fix-row{ display:flex; gap:6px; }
+.scale-fix-row select{ flex:0 0 auto; width:auto; }
+.scale-fix-row input{ flex:1; min-width:0; }
+.help-sub{ font-size:.85rem; font-weight:700; margin:10px 0 4px; }
