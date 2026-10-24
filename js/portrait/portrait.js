@@ -16,7 +16,7 @@
    Nenhuma imagem sai do dispositivo. */
 (function (root) {
   'use strict';
-  const VER = '20261023a';
+  const VER = '20261024a';
   const BASE = (function () {
     const s = document.currentScript && document.currentScript.src;
     return s ? new URL('.', s).href : 'js/portrait/';

@@ -38,6 +38,7 @@ function openEditModal(idx) {
   document.getElementById('aiResult').classList.add('hidden');
   clearDrawCanvas();
   setupCropEvents();
+  if (!(history.state && history.state.gsEdit)) { try { history.pushState({gsEdit:1},''); } catch(_){} }
 }
 
 /* Zera sliders, efeito, moldura e balanço — sem re-renderizar */
@@ -52,7 +53,10 @@ function resetEditState() {
 
 /* CORREÇÃO: fechar o modal deixava o vídeo tocando (com áudio) ao fundo
    e mantinha as edições pendentes. */
-function closeModal() {
+function closeModal(fromHistory) {
+  if (document.getElementById('editModal').classList.contains('hidden')) return;
+  /* textos ainda soltos sobre a foto são incorporados antes de fechar */
+  if (currentTab==='text') WText.close();
   /* ajuste feito há menos de 280 ms: aplica em resolução cheia antes de fechar */
   if (_fullTimer) { clearTimeout(_fullTimer); _fullTimer=null; renderEdits(); }
   flushSave();
@@ -61,9 +65,22 @@ function closeModal() {
   document.getElementById('editModal').classList.add('hidden');
   cleanupCropEvents(); cleanupDrawEvents(); clearDrawCanvas();
   editingIdx=-1;
+  /* o editor ocupa uma entrada do histórico: o "voltar" do celular fecha só o editor */
+  if (!fromHistory && history.state && history.state.gsEdit) { _editHistSkip=true; history.back(); }
 }
 
+/* Botão "voltar" do celular / navegador com o editor aberto: fecha o editor
+   e volta para a galeria em vez de sair do app. */
+let _editHistSkip=false;
+window.addEventListener('popstate', ()=>{
+  if (_editHistSkip) { _editHistSkip=false; return; }
+  if (WText.isComposing()) { WText.done(); history.pushState({gsEdit:1},''); return; }
+  if (!document.getElementById('editModal').classList.contains('hidden')) closeModal(true);
+});
+
 function openTab(tab,el) {
+  /* saindo da aba Texto: os textos são incorporados à foto */
+  if (currentTab==='text' && tab!=='text') WText.close();
   currentTab=tab;
   document.querySelectorAll('.etab').forEach(b=>{ b.classList.remove('active'); b.setAttribute('aria-selected','false'); });
   if(el){ el.classList.add('active'); el.setAttribute('aria-selected','true'); }
@@ -73,8 +90,9 @@ function openTab(tab,el) {
   const cropOv=document.getElementById('cropOverlay');
   const drawCv=document.getElementById('drawCanvas');
   if(tab==='crop'){cropOv.classList.remove('hidden');drawCv.classList.add('hidden');}
-  else if(tab==='draw'||tab==='text'){cropOv.classList.add('hidden');setupDrawCanvas(tab);drawCv.classList.remove('hidden');resetCropUI();}
+  else if(tab==='draw'){cropOv.classList.add('hidden');setupDrawCanvas(tab);drawCv.classList.remove('hidden');resetCropUI();}
   else{cropOv.classList.add('hidden');drawCv.classList.add('hidden');resetCropUI();}
+  if(tab==='text') WText.open();
 }
 
 
@@ -430,10 +448,8 @@ function applyCrop(){
 
 
 /* ══════════════════════════════════════
-   21. DESENHO E TEXTO
-   CORREÇÃO: (1) a função que posiciona o texto nunca era ligada ao canvas —
-   tocar na imagem na aba Texto não fazia nada (e desenhava traços);
-   (2) o desenho era esticado do tamanho do contêiner para a foto,
+   21. DESENHO
+   CORREÇÃO: o desenho era esticado do tamanho do contêiner para a foto,
    desalinhando quando a foto não preenchia o contêiner.
 ══════════════════════════════════════ */
 function setupDrawCanvas(mode) {
@@ -442,8 +458,7 @@ function setupDrawCanvas(mode) {
   const rect=preview.getBoundingClientRect();
   if(dc.width!==Math.round(rect.width)||dc.height!==Math.round(rect.height)){ dc.width=Math.round(rect.width); dc.height=Math.round(rect.height); }
   dc.dataset.mode=mode;
-  dc.onclick = mode==='text' ? onTextPlace : null;
-  dc.style.cursor = mode==='text' ? 'text' : 'crosshair';
+  dc.style.cursor = 'crosshair';
   dc.removeEventListener('mousedown',onDrawStart);
   dc.removeEventListener('touchstart',onDrawStartT);
   dc.addEventListener('mousedown',onDrawStart);
@@ -506,26 +521,4 @@ function applyDraw(msg){
   commitBaked(p,canvas.toDataURL('image/jpeg',.93),canvas.width,canvas.height,msg||t('drawApplied'));
 }
 
-/* Texto: toque/clique posiciona o texto no canvas de pré-visualização */
-function onTextPlace(e){
-  const text=document.getElementById('textInput').value.trim();
-  if(!text){toast('Digite o texto primeiro');document.getElementById('textInput').focus();return;}
-  const pos=getDrawPos(e);
-  const size=+document.getElementById('textSize').value;
-  const color=document.getElementById('textColor').value;
-  const font=document.getElementById('textFont').value;
-  const ctx=document.getElementById('drawCanvas').getContext('2d');
-  /* tamanho proporcional à imagem exibida (fica igual no arquivo final) */
-  const r=imageContentRect();
-  const px=Math.max(10,Math.round(size*Math.min(1,r.drawW/600)));
-  ctx.font=`700 ${px}px "${font}", sans-serif`;
-  ctx.fillStyle=color;
-  ctx.textBaseline='middle';
-  ctx.shadowColor='rgba(0,0,0,.5)';ctx.shadowBlur=4;
-  ctx.fillText(text,pos.x,pos.y);
-  ctx.shadowBlur=0;
-  toast('Texto posicionado — toque em "Aplicar Texto" para salvar');
-}
-
-function applyText(){applyDraw(t('textApplied'));}
-function clearText(){clearDrawCanvas();}
+/* Texto: ver js/app/text-story.js (texto livre no estilo dos status do WhatsApp) */

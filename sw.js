@@ -2,11 +2,11 @@
    Estratégia "rede primeiro, cache como reserva": sempre busca a versão
    mais nova quando há conexão (evita servir código desatualizado após
    atualizações) e permite abrir o app offline com o que já foi carregado. */
-const CACHE = 'gslens-v15';
+const CACHE = 'gslens-v16';
 const CORE = [
   './', './index.html', './manifest.webmanifest',
   './css/style.css', './css/vendor/bootstrap4.local.css',
-  './js/app/core.js', './js/app/camera.js', './js/app/camera-filters.js', './js/app/modes.js', './js/app/recording.js', './js/app/live-fx.js', './js/app/capture.js', './js/app/gallery.js', './js/app/editor.js', './js/app/analysis.js', './js/app/share-export.js', './js/app/dashboard.js', './js/app/main.js', './js/vendor/jspdf/jspdf.umd.min.js',
+  './js/app/core.js', './js/app/camera.js', './js/app/camera-filters.js', './js/app/modes.js', './js/app/recording.js', './js/app/live-fx.js', './js/app/capture.js', './js/app/gallery.js', './js/app/editor.js', './js/app/text-story.js', './js/app/analysis.js', './js/app/share-export.js', './js/app/dashboard.js', './js/app/main.js', './js/vendor/jspdf/jspdf.umd.min.js',
   './js/vendor/aruco/cv.js', './js/vendor/aruco/aruco.js',
   './js/scan3d/math.js', './js/scan3d/board.js', './js/scan3d/tracker.js', './js/scan3d/features.js', './js/scan3d/surface.js', './js/scan3d/segment.js',
   './js/scan3d/reconstruct.js', './js/scan3d/texture.js', './js/scan3d/pipeline.js',

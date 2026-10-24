@@ -36,7 +36,7 @@ let hwZoom         = false;   /* zoom óptico/hardware em uso (vs. digital via C
 let timerDelay     = 0;
 let timerInterval  = null;
 let evLevel        = 0;
-let evStripVisible = false;
+let evStripVisible = true;   /* EV visível desde a abertura da câmera */
 let cameraBusy     = false;
 
 /* Efeitos ao vivo (antes ficavam dentro da aba AR) */

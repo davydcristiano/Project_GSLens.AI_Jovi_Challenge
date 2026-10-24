@@ -18,17 +18,17 @@
        com boa aparência mesmo sem baixar fontes externas. -->
 
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
-  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261023a">
+  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261024a">
 
   <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
        PDF em lote e pela prancha imprimível do Scanner 3D.
        Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
        a tela mostra os mesmos dados em lista em vez de quebrar. -->
-  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261023a" defer></script>
+  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261024a" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
-  <link rel="stylesheet" href="css/style.css?v=20261023a">
+  <link rel="stylesheet" href="css/style.css?v=20261024a">
 </head>
 
 <body class="theme-dark">
@@ -212,7 +212,7 @@
     <div class="cam-controls">
 
       <!-- Exposição -->
-      <div class="ev-strip hidden d-flex align-items-center px-3 py-2" id="evStrip">
+      <div class="ev-strip d-flex align-items-center px-3 py-2" id="evStrip">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="5" />
           <line x1="12" y1="1" x2="12" y2="3" />
@@ -357,9 +357,6 @@
 
       <!-- Extras -->
       <div class="extra-controls d-flex flex-wrap justify-content-center px-2 pb-3">
-        <button class="btn extra-btn" onclick="toggleEvStrip()">☀️ EV</button>
-        <button class="btn extra-btn" onclick="shareLastPhoto()">📤 Compartilhar</button>
-        <button class="btn extra-btn" onclick="openDashboard()">📊 Stats</button>
         <button class="btn extra-btn" id="installBtn2" style="display:none" onclick="installPWA()">📲 Instalar</button>
       </div>
 
@@ -434,7 +431,14 @@
   <div id="editModal" class="modal-overlay hidden">
     <div class="modal-backdrop-custom" onclick="closeModal()"></div>
     <div class="modal-sheet">
-      <div class="modal-handle"></div>
+      <div class="modal-head">
+        <button class="btn back-btn modal-back" id="editBackBtn" onclick="closeModal()" aria-label="Voltar" title="Voltar">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+            <path d="M19 12H5M12 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <div class="modal-handle"></div>
+      </div>
 
       <div class="modal-preview" id="modalPreview">
         <img id="modalImg" alt="">
@@ -445,6 +449,11 @@
           <p class="crop-tip-overlay">Arraste para recortar</p>
         </div>
         <canvas id="drawCanvas" class="draw-canvas hidden"></canvas>
+        <div id="wtLayer" class="wt-layer hidden" aria-label="Textos sobre a foto"></div>
+        <div id="wtHint" class="wt-hint hidden">Toque na foto para escrever</div>
+        <div id="wtTrash" class="wt-trash" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg>
+        </div>
       </div>
 
       <!-- Abas -->
@@ -453,7 +462,7 @@
         <button class="btn etab" role="tab" data-tab="effects" onclick="openTab('effects',this)">Efeitos</button>
         <button class="btn etab" role="tab" data-tab="crop" onclick="openTab('crop',this)">Recortar</button>
         <button class="btn etab" role="tab" data-tab="draw" onclick="openTab('draw',this)">Desenho</button>
-        <button class="btn etab" role="tab" data-tab="text" onclick="openTab('text',this)">Texto</button>
+        <button class="btn etab" role="tab" data-tab="text" onclick="openTab('text',this)"><b class="etab-aa">Aa</b> Texto</button>
         <button class="btn etab" role="tab" data-tab="frame" onclick="openTab('frame',this)">Moldura</button>
         <button class="btn etab" role="tab" data-tab="ai" onclick="openTab('ai',this)">🤖 Auto</button>
         <button class="btn etab" role="tab" data-tab="export" onclick="openTab('export',this)">Exportar</button>
@@ -524,32 +533,19 @@
         </div>
       </div>
 
-      <!-- TEXTO -->
+      <!-- TEXTO LIVRE (estilo status do WhatsApp) — js/app/text-story.js -->
       <div class="epanel hidden" id="panelText">
-        <div class="text-controls">
-          <input type="text" id="textInput" placeholder="Digite o texto..." class="form-control text-field mb-2">
-          <div class="text-opts d-flex flex-wrap align-items-center">
-            <label class="mb-0 mr-1">Cor</label>
-            <input type="color" class="form-control-color mr-3" id="textColor" value="#ffffff">
-            <label class="mb-0 mr-1">Tamanho</label>
-            <select id="textSize" class="form-control form-control-sm w-auto mr-3">
-              <option value="24">Pequeno</option>
-              <option value="36" selected>Médio</option>
-              <option value="52">Grande</option>
-              <option value="72">Enorme</option>
-            </select>
-            <label class="mb-0 mr-1">Fonte</label>
-            <select id="textFont" class="form-control form-control-sm w-auto">
-              <option value="Syne">Syne</option>
-              <option value="Space Mono">Space Mono</option>
-              <option value="Arial">Arial</option>
-              <option value="serif">Serif</option>
-            </select>
-          </div>
-          <p class="crop-help mt-2">Toque na imagem para posicionar o texto.</p>
+        <div class="wt-panel">
+          <button class="btn wt-add" id="wtAdd" onclick="WText.compose()"><span class="wt-aa" aria-hidden="true">Aa</span> Adicionar texto</button>
+          <ul class="wt-tips">
+            <li>☝️ Arraste para mover</li>
+            <li>✌️ Dois dedos: girar e mudar o tamanho</li>
+            <li>👆 Toque no texto para editar</li>
+            <li>🗑️ Arraste até a lixeira para apagar</li>
+          </ul>
           <div class="draw-btns d-flex">
-            <button class="btn btn-sm btn-accent btn-crop-apply mr-2" onclick="applyText()">✓ Aplicar Texto</button>
-            <button class="btn btn-sm btn-outline-light btn-crop-reset" onclick="clearText()">↺ Limpar</button>
+            <button class="btn btn-sm btn-accent btn-crop-apply mr-2" id="wtApply" onclick="WText.apply()" disabled>✓ Aplicar na foto</button>
+            <button class="btn btn-sm btn-outline-light btn-crop-reset" id="wtClear" onclick="WText.clear()" disabled>↺ Remover textos</button>
           </div>
         </div>
       </div>
@@ -613,6 +609,25 @@
       </div>
 
     </div><!-- /modal-sheet -->
+
+    <!-- Compositor de texto em tela cheia (como ao escrever no status do WhatsApp) -->
+    <div id="wtComposer" class="wt-composer hidden" role="dialog" aria-modal="true" aria-label="Escrever texto">
+      <div class="wt-top">
+        <button class="wt-ic" id="wtFontBtn" onclick="WText.nextFont()" aria-label="Trocar fonte" title="Trocar fonte">Aa</button>
+        <button class="wt-ic" id="wtBgBtn" onclick="WText.nextBg()" aria-label="Fundo do texto" title="Fundo do texto"><span>A</span></button>
+        <button class="wt-ic" id="wtAlignBtn" onclick="WText.nextAlign()" aria-label="Alinhamento" title="Alinhamento">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path class="al-1" d="M4 6h16"/><path class="al-2" d="M7 12h10"/><path class="al-3" d="M5 18h14"/></svg>
+        </button>
+        <button class="wt-done" id="wtDone" onclick="WText.done()">Concluir</button>
+      </div>
+      <div class="wt-stage">
+        <textarea id="wtInput" rows="1" placeholder="Digite um texto" aria-label="Texto" autocomplete="off" autocapitalize="sentences" spellcheck="false"></textarea>
+      </div>
+      <div class="wt-fontname" id="wtFontName"></div>
+      <div class="wt-colors" id="wtColors" role="slider" tabindex="0" aria-label="Cor do texto" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="wt-color-thumb" id="wtColorThumb"></div>
+      </div>
+    </div>
   </div><!-- /editModal -->
 
   <!-- ═══════════════════════════════════════
@@ -773,43 +788,44 @@
 
   <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
   <!-- Leitor de QR (jsQR, Apache-2.0) + filtros e molduras + leitor de links -->
-  <script src="js/vendor/jsqr/jsQR.js?v=20261023a" defer></script>
-  <script src="js/gpuframe.js?v=20261023a"></script>
-  <script src="js/filters.js?v=20261023a"></script>
-  <script src="js/frames.js?v=20261023a"></script>
-  <script src="js/links/linkscan.js?v=20261023a"></script>
-  <script src="js/nightslow.js?v=20261023a"></script>
-  <script src="js/portrait/tflite.js?v=20261023a"></script>
-  <script src="js/portrait/portrait.js?v=20261023a"></script>
-  <script src="js/vendor/aruco/cv.js?v=20261023a"></script>
-  <script src="js/vendor/aruco/aruco.js?v=20261023a"></script>
+  <script src="js/vendor/jsqr/jsQR.js?v=20261024a" defer></script>
+  <script src="js/gpuframe.js?v=20261024a"></script>
+  <script src="js/filters.js?v=20261024a"></script>
+  <script src="js/frames.js?v=20261024a"></script>
+  <script src="js/links/linkscan.js?v=20261024a"></script>
+  <script src="js/nightslow.js?v=20261024a"></script>
+  <script src="js/portrait/tflite.js?v=20261024a"></script>
+  <script src="js/portrait/portrait.js?v=20261024a"></script>
+  <script src="js/vendor/aruco/cv.js?v=20261024a"></script>
+  <script src="js/vendor/aruco/aruco.js?v=20261024a"></script>
   <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
-  <script src="js/scan3d/math.js?v=20261023a"></script>
-  <script src="js/scan3d/board.js?v=20261023a"></script>
-  <script src="js/scan3d/tracker.js?v=20261023a"></script>
-  <script src="js/scan3d/features.js?v=20261023a"></script>
-  <script src="js/scan3d/surface.js?v=20261023a"></script>
-  <script src="js/scan3d/segment.js?v=20261023a"></script>
-  <script src="js/scan3d/reconstruct.js?v=20261023a"></script>
-  <script src="js/scan3d/texture.js?v=20261023a"></script>
-  <script src="js/scan3d/pipeline.js?v=20261023a"></script>
-  <script src="js/scan3d/exporters.js?v=20261023a"></script>
-  <script src="js/scan3d/viewer.js?v=20261023a"></script>
-  <script src="js/scan3d/app.js?v=20261023a"></script>
+  <script src="js/scan3d/math.js?v=20261024a"></script>
+  <script src="js/scan3d/board.js?v=20261024a"></script>
+  <script src="js/scan3d/tracker.js?v=20261024a"></script>
+  <script src="js/scan3d/features.js?v=20261024a"></script>
+  <script src="js/scan3d/surface.js?v=20261024a"></script>
+  <script src="js/scan3d/segment.js?v=20261024a"></script>
+  <script src="js/scan3d/reconstruct.js?v=20261024a"></script>
+  <script src="js/scan3d/texture.js?v=20261024a"></script>
+  <script src="js/scan3d/pipeline.js?v=20261024a"></script>
+  <script src="js/scan3d/exporters.js?v=20261024a"></script>
+  <script src="js/scan3d/viewer.js?v=20261024a"></script>
+  <script src="js/scan3d/app.js?v=20261024a"></script>
   <!-- App (antes um único script.js de 2.300 linhas), na ordem de dependência -->
-  <script src="js/app/core.js?v=20261023a"></script>
-  <script src="js/app/camera.js?v=20261023a"></script>
-  <script src="js/app/camera-filters.js?v=20261023a"></script>
-  <script src="js/app/modes.js?v=20261023a"></script>
-  <script src="js/app/recording.js?v=20261023a"></script>
-  <script src="js/app/live-fx.js?v=20261023a"></script>
-  <script src="js/app/capture.js?v=20261023a"></script>
-  <script src="js/app/gallery.js?v=20261023a"></script>
-  <script src="js/app/editor.js?v=20261023a"></script>
-  <script src="js/app/analysis.js?v=20261023a"></script>
-  <script src="js/app/share-export.js?v=20261023a"></script>
-  <script src="js/app/dashboard.js?v=20261023a"></script>
-  <script src="js/app/main.js?v=20261023a"></script>
+  <script src="js/app/core.js?v=20261024a"></script>
+  <script src="js/app/camera.js?v=20261024a"></script>
+  <script src="js/app/camera-filters.js?v=20261024a"></script>
+  <script src="js/app/modes.js?v=20261024a"></script>
+  <script src="js/app/recording.js?v=20261024a"></script>
+  <script src="js/app/live-fx.js?v=20261024a"></script>
+  <script src="js/app/capture.js?v=20261024a"></script>
+  <script src="js/app/gallery.js?v=20261024a"></script>
+  <script src="js/app/editor.js?v=20261024a"></script>
+  <script src="js/app/text-story.js?v=20261024a"></script>
+  <script src="js/app/analysis.js?v=20261024a"></script>
+  <script src="js/app/share-export.js?v=20261024a"></script>
+  <script src="js/app/dashboard.js?v=20261024a"></script>
+  <script src="js/app/main.js?v=20261024a"></script>
 </body>
 
 </html>
