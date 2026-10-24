@@ -361,7 +361,7 @@ const WText = (() => {
       renderEl(it);
     } else if (text.trim()) {
       fitLayer();
-      const it = { id: nextId++, text, ...draft, colorPos, x: 0.5, y: 0.42, scale: 1, rot: 0, el: null };
+      const it = Object.assign({ id: nextId++, text: text }, draft, { colorPos: colorPos, x: 0.5, y: 0.42, scale: 1, rot: 0, el: null });
       items.push(it);
       renderEl(it);
     }

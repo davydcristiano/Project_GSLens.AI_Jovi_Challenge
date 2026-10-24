@@ -59,14 +59,16 @@ function applyLivePreview(fx) {
 function paintPreviewCss() {
   const video = document.getElementById('video'), fc = document.getElementById('filterCanvas'), lc = document.getElementById('liveCanvas');
   const base = previewBaseCss === 'none' ? '' : previewBaseCss;
+  /* EV (feito pelo app, igual em todos os celulares): por último na cadeia */
+  const ev = evLevel ? `brightness(${evFactor(evLevel).toFixed(3)})` : '';
   if (liveLayer) {
     video.style.filter = 'none';
-    if (lc) lc.style.filter = base;
-    if (fc) fc.style.filter = '';
+    if (lc) lc.style.filter = (base + ' ' + ev).trim();
+    if (fc) fc.style.filter = ev;
   } else {
-    video.style.filter = (nightCss + ' ' + base).trim() || 'none';
+    video.style.filter = (nightCss + ' ' + base + ' ' + ev).trim() || 'none';
     if (lc) lc.style.filter = '';
-    if (fc) fc.style.filter = nightCss || '';
+    if (fc) fc.style.filter = (nightCss + ' ' + ev).trim();
   }
 }
 
@@ -99,7 +101,7 @@ function startNightPreview() {
     tick();
   }
   /* exposição de hardware mais alta, quando a câmera permite (Android/Chrome) */
-  setTrackExposure(Math.max(evLevel, 1.5));
+  setTrackExposure(1.5);
 }
 function stopNightPreview() {
   if (nightTimer) { clearTimeout(nightTimer); nightTimer = null; }

@@ -82,6 +82,8 @@ async function capture() {
   }
   /* O filtro (como na prévia CSS) afeta só a imagem da câmera, não o efeito */
   applyFilter(ctx,vw,vh,currentFilter,1);
+  /* EV: o mesmo ajuste de brilho da prévia (CSS brightness = multiplicação) */
+  if (evLevel) applyEv(ctx, vw, vh, evLevel);
   /* CORREÇÃO: o efeito era esticado do tamanho do visor para o quadro
      inteiro do vídeo, ficando deslocado/deformado (o visor usa object-fit:
      cover e mostra só parte do quadro). Agora é posicionado sobre a mesma
@@ -114,6 +116,14 @@ async function capture() {
 /* DESEMPENHO: toDataURL comprime o JPEG de forma síncrona (numa foto de
    12 MP, centenas de ms com a tela congelada). toBlob comprime em segundo
    plano e captura o conteúdo do canvas no momento da chamada. */
+function applyEv(ctx, w, h, ev) {
+  const f = evFactor(ev), lut = new Uint8ClampedArray(256);
+  for (let i = 0; i < 256; i++) lut[i] = i * f;
+  const id = ctx.getImageData(0, 0, w, h), d = id.data;
+  for (let i = 0; i < d.length; i += 4) { d[i] = lut[d[i]]; d[i + 1] = lut[d[i + 1]]; d[i + 2] = lut[d[i + 2]]; }
+  ctx.putImageData(id, 0, 0);
+}
+
 function encodeJpeg(canvas, q) {
   return new Promise(resolve => {
     if (!canvas.toBlob) { resolve(canvas.toDataURL('image/jpeg', q)); return; }

@@ -10,6 +10,7 @@
 
 Modificações mínimas feitas nos arquivos de terceiros:
 
+- `three/three.min.js` e `tesseract/tesseract-core-lstm.wasm.js`: convertidos (esbuild 0.28, `--target=chrome58`) para JavaScript de 2017, para rodar em Android antigos; o comportamento é o mesmo.
 - `three/three.min.js`: removido apenas o `console.warn` inicial que avisa que o build UMD é
   "deprecated" (o arquivo é o oficial do r160; o aviso poluía o console a cada carregamento).
 - `three/OrbitControls.js`: convertido de ES module para script clássico (as importações de

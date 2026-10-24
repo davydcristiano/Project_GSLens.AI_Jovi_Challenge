@@ -32,7 +32,7 @@ function setMode(mode) {
 
   if (isFx) startFx(currentFx); else stopFx();
   if (mode === 'noite') startNightPreview();
-  else if (prev === 'noite') { stopNightPreview(); setTrackExposure(evLevel); }
+  else if (prev === 'noite') { stopNightPreview(); setTrackExposure(0); }
   if (mode === 'retrato') startPortraitPreview();
   else if (prev === 'retrato') stopPortraitPreview();
   if (prev === 'ar' && !isAR && window.Scan3D) Scan3D.exit();

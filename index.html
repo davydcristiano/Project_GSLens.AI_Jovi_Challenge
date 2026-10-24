@@ -18,17 +18,17 @@
        com boa aparência mesmo sem baixar fontes externas. -->
 
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
-  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261024c">
+  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261024d">
 
   <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
        PDF em lote e pela prancha imprimível do Scanner 3D.
        Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
        a tela mostra os mesmos dados em lista em vez de quebrar. -->
-  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261024c" defer></script>
+  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261024d" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
-  <link rel="stylesheet" href="css/style.css?v=20261024c">
+  <link rel="stylesheet" href="css/style.css?v=20261024d">
 </head>
 
 <body class="theme-dark">
@@ -220,7 +220,7 @@
           <line x1="12" y1="21" x2="12" y2="23" />
           <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
         </svg>
-        <input type="range" class="custom-range mx-2" id="evSlider" min="-2" max="2" step="0.1" value="0" oninput="setExposure(this.value)">
+        <input type="range" class="custom-range mx-2" id="evSlider" min="-2" max="2" step="0.1" value="0" autocomplete="off" aria-label="Exposição (EV)" oninput="setExposure(this.value)" ondblclick="setExposure(0)">
         <span class="zl" id="evVal">0</span>
       </div>
 
@@ -900,45 +900,46 @@
 
   <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
   <!-- Leitor de QR (jsQR, Apache-2.0) + filtros e molduras + leitor de links -->
-  <script src="js/vendor/jsqr/jsQR.js?v=20261024c" defer></script>
-  <script src="js/gpuframe.js?v=20261024c"></script>
-  <script src="js/filters.js?v=20261024c"></script>
-  <script src="js/frames.js?v=20261024c"></script>
-  <script src="js/links/linkscan.js?v=20261024c"></script>
-  <script src="js/nightslow.js?v=20261024c"></script>
-  <script src="js/portrait/tflite.js?v=20261024c"></script>
-  <script src="js/portrait/portrait.js?v=20261024c"></script>
-  <script src="js/vendor/aruco/cv.js?v=20261024c"></script>
-  <script src="js/vendor/aruco/aruco.js?v=20261024c"></script>
+  <script src="js/vendor/jsqr/jsQR.js?v=20261024d" defer></script>
+  <script src="js/perf.js?v=20261024d"></script>
+  <script src="js/gpuframe.js?v=20261024d"></script>
+  <script src="js/filters.js?v=20261024d"></script>
+  <script src="js/frames.js?v=20261024d"></script>
+  <script src="js/links/linkscan.js?v=20261024d"></script>
+  <script src="js/nightslow.js?v=20261024d"></script>
+  <script src="js/portrait/tflite.js?v=20261024d"></script>
+  <script src="js/portrait/portrait.js?v=20261024d"></script>
+  <script src="js/vendor/aruco/cv.js?v=20261024d"></script>
+  <script src="js/vendor/aruco/aruco.js?v=20261024d"></script>
   <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
-  <script src="js/scan3d/math.js?v=20261024c"></script>
-  <script src="js/scan3d/board.js?v=20261024c"></script>
-  <script src="js/scan3d/tracker.js?v=20261024c"></script>
-  <script src="js/scan3d/features.js?v=20261024c"></script>
-  <script src="js/scan3d/surface.js?v=20261024c"></script>
-  <script src="js/scan3d/segment.js?v=20261024c"></script>
-  <script src="js/scan3d/reconstruct.js?v=20261024c"></script>
-  <script src="js/scan3d/texture.js?v=20261024c"></script>
-  <script src="js/scan3d/pipeline.js?v=20261024c"></script>
-  <script src="js/scan3d/exporters.js?v=20261024c"></script>
-  <script src="js/scan3d/viewer.js?v=20261024c"></script>
-  <script src="js/scan3d/app.js?v=20261024c"></script>
+  <script src="js/scan3d/math.js?v=20261024d"></script>
+  <script src="js/scan3d/board.js?v=20261024d"></script>
+  <script src="js/scan3d/tracker.js?v=20261024d"></script>
+  <script src="js/scan3d/features.js?v=20261024d"></script>
+  <script src="js/scan3d/surface.js?v=20261024d"></script>
+  <script src="js/scan3d/segment.js?v=20261024d"></script>
+  <script src="js/scan3d/reconstruct.js?v=20261024d"></script>
+  <script src="js/scan3d/texture.js?v=20261024d"></script>
+  <script src="js/scan3d/pipeline.js?v=20261024d"></script>
+  <script src="js/scan3d/exporters.js?v=20261024d"></script>
+  <script src="js/scan3d/viewer.js?v=20261024d"></script>
+  <script src="js/scan3d/app.js?v=20261024d"></script>
   <!-- App (antes um único script.js de 2.300 linhas), na ordem de dependência -->
-  <script src="js/app/core.js?v=20261024c"></script>
-  <script src="js/app/camera.js?v=20261024c"></script>
-  <script src="js/app/camera-filters.js?v=20261024c"></script>
-  <script src="js/app/modes.js?v=20261024c"></script>
-  <script src="js/app/recording.js?v=20261024c"></script>
-  <script src="js/app/live-fx.js?v=20261024c"></script>
-  <script src="js/app/capture.js?v=20261024c"></script>
-  <script src="js/app/gallery.js?v=20261024c"></script>
-  <script src="js/app/editor.js?v=20261024c"></script>
-  <script src="js/app/text-story.js?v=20261024c"></script>
-  <script src="js/app/reels.js?v=20261024c"></script>
-  <script src="js/app/analysis.js?v=20261024c"></script>
-  <script src="js/app/share-export.js?v=20261024c"></script>
-  <script src="js/app/dashboard.js?v=20261024c"></script>
-  <script src="js/app/main.js?v=20261024c"></script>
+  <script src="js/app/core.js?v=20261024d"></script>
+  <script src="js/app/camera.js?v=20261024d"></script>
+  <script src="js/app/camera-filters.js?v=20261024d"></script>
+  <script src="js/app/modes.js?v=20261024d"></script>
+  <script src="js/app/recording.js?v=20261024d"></script>
+  <script src="js/app/live-fx.js?v=20261024d"></script>
+  <script src="js/app/capture.js?v=20261024d"></script>
+  <script src="js/app/gallery.js?v=20261024d"></script>
+  <script src="js/app/editor.js?v=20261024d"></script>
+  <script src="js/app/text-story.js?v=20261024d"></script>
+  <script src="js/app/reels.js?v=20261024d"></script>
+  <script src="js/app/analysis.js?v=20261024d"></script>
+  <script src="js/app/share-export.js?v=20261024d"></script>
+  <script src="js/app/dashboard.js?v=20261024d"></script>
+  <script src="js/app/main.js?v=20261024d"></script>
 </body>
 
 </html>

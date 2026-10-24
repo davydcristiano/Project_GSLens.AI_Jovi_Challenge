@@ -188,7 +188,7 @@
     const isVid = v.tagName === 'VIDEO', vw = isVid ? v.videoWidth : v.width, vh = isVid ? v.videoHeight : v.height;
     /* controle de fluxo: só desenha se a GPU já terminou o quadro anterior */
     if (vw && (!isVid || v.readyState >= 2) && (!P.pacer || P.pacer.ready())) {
-      const sc = Math.min(1, 1280 / Math.max(vw, vh));
+      const sc = Math.min(1, ((window.GSPerf && GSPerf.previewMax) || 1280) / Math.max(vw, vh));
       const w = Math.round(vw * sc), h = Math.round(vh * sc);
       if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
       gl.viewport(0, 0, w, h);

@@ -8,6 +8,9 @@
    4. INICIALIZAÇÃO
 ══════════════════════════════════════ */
 window.addEventListener('DOMContentLoaded', async () => {
+  /* EV sempre começa em 0.0 (alguns navegadores restauram a posição do controle) */
+  setExposure(0);
+  window.addEventListener('pageshow', () => { if (!stream) setExposure(0); });
   loadTheme();
   galEmptyEl = document.getElementById('galEmpty');
   /* CORREÇÃO: estados iniciais coerentes com as variáveis (AF ligado,

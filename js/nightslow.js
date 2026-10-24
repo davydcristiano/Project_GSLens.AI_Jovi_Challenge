@@ -127,7 +127,9 @@
     const { video, ctx, w, h, grab, onProgress } = opts;
     const st = sceneStats(video) || { mean: 60 };
     /* cenas mais escuras → mais quadros */
-    const N = st.mean < 25 ? 12 : st.mean < 60 ? 10 : 6;
+    let N = st.mean < 25 ? 12 : st.mean < 60 ? 10 : 6;
+    /* aparelho modesto: no máximo 8 quadros (um terço a menos de tempo segurando o celular) */
+    if (root.GSPerf && root.GSPerf.low) N = Math.min(N, 8);
     await grab();
     const ref = ctx.getImageData(0, 0, w, h);
     const refPyr = pyramid(ref.data, w, h);
@@ -344,7 +346,7 @@
     if (NL.pacer === undefined) NL.pacer = root.GSGpuPacer ? new root.GSGpuPacer(gl) : null;
     if (NL.pacer && !NL.pacer.ready()) return;
     /* resolução de trabalho: até 960 px no lado maior (prévia) */
-    const sc = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
+    const sc = Math.min(1, ((root.GSPerf && root.GSPerf.liveMax) || 960) / Math.max(v.videoWidth, v.videoHeight));
     const w = Math.round(v.videoWidth * sc), h = Math.round(v.videoHeight * sc);
     if (w !== NL.w || h !== NL.h) { nlAlloc(w, h); NL.canvas.width = w; NL.canvas.height = h; }
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, NL.cur);

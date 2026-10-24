@@ -16,7 +16,7 @@
    Nenhuma imagem sai do dispositivo. */
 (function (root) {
   'use strict';
-  const VER = '20261024c';
+  const VER = '20261024d';
   const BASE = (function () {
     const s = document.currentScript && document.currentScript.src;
     return s ? new URL('.', s).href : 'js/portrait/';
@@ -253,21 +253,25 @@
     if (!L.on) return;
     const v = L.video;
     if (v.videoWidth && v.readyState >= 2) {
+      /* 960 px mesmo no modo leve: abaixo disso o desfoque (feito em 1/4 da
+         resolução) satura e o controle de intensidade perde efeito; o custo do
+         Retrato está na IA, que o modo leve já espaça */
       const sc = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
       const w = Math.round(v.videoWidth * sc), h = Math.round(v.videoHeight * sc);
       try { L.comp.draw(v, w, h, L.amount, !!L.mask && L.person > 0.01); } catch (e) { console.warn('Retrato:', e); }
       /* DESEMPENHO: a imagem para a IA (256×144/256) é pedida à GPU sem bloquear
          a interface e usada quando ficar pronta (1–2 quadros depois) */
-      if (!Seg.busy) {
+      const minMs = (root.GSPerf && root.GSPerf.segMinMs) || 0;
+      if (!Seg.busy && (!minMs || performance.now() - (L.lastSeg || 0) >= minMs)) {
         if (!L.reader) L.reader = root.GSFrameReader ? new GSFrameReader() : null;
         if (L.reader) {
           const f = L.reader.poll();
-          if (f) { Seg.busy = true; Seg.runRGBA(f.data, L.pendModel, f.w, f.h).then(onMask, onMaskErr); }
+          if (f) { Seg.busy = true; L.lastSeg = performance.now(); Seg.runRGBA(f.data, L.pendModel, f.w, f.h).then(onMask, onMaskErr); }
           else if (!L.reader.busy) {
             L.pendModel = Seg.modelFor(v.videoWidth, v.videoHeight);
             L.reader.request(v, 0, 0, v.videoWidth, v.videoHeight, 256, L.pendModel === 'landscape' ? 144 : 256);
           }
-        } else { Seg.busy = true; Seg.run(v, v.videoWidth, v.videoHeight).then(onMask, onMaskErr); }
+        } else { Seg.busy = true; L.lastSeg = performance.now(); Seg.run(v, v.videoWidth, v.videoHeight).then(onMask, onMaskErr); }
       }
     }
     if (v.requestVideoFrameCallback) L.vfc = v.requestVideoFrameCallback(liveFrame);

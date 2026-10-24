@@ -69,8 +69,8 @@
         this.renderer.render(this.scene, this.camera);
       };
       this._raf = requestAnimationFrame(this._loop);
-      this._ro = new ResizeObserver(() => this.resize());
-      this._ro.observe(this.container);
+      if (typeof ResizeObserver !== 'undefined') { this._ro = new ResizeObserver(() => this.resize()); this._ro.observe(this.container); }
+      else { this._onWin = () => this.resize(); window.addEventListener('resize', this._onWin); }   /* Chrome < 64 */
     }
     resize() {
       if (!this.renderer) return;
@@ -147,6 +147,7 @@
       this.disposed = true;
       cancelAnimationFrame(this._raf);
       if (this._ro) this._ro.disconnect();
+      if (this._onWin) window.removeEventListener('resize', this._onWin);
       this.clearModel();
       if (this.controls) this.controls.dispose();
       if (this.renderer) {

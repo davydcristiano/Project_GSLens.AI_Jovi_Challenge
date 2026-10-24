@@ -23,11 +23,18 @@ function cameraErrorMessage(e) {
 /* CORREÇÃO: antes pedia vídeo + áudio juntos; sem microfone (ou com o
    microfone negado) a câmera inteira falhava. Agora o áudio é opcional. */
 async function openStream(front) {
+  /* Android antigo (WebView/Chrome < 53): só a API com prefixo */
+  if ((!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) && (navigator.webkitGetUserMedia || navigator.getUserMedia)) {
+    const legacy = (navigator.webkitGetUserMedia || navigator.getUserMedia).bind(navigator);
+    navigator.mediaDevices = navigator.mediaDevices || {};
+    navigator.mediaDevices.getUserMedia = c => new Promise((res, rej) => legacy(c, res, rej));
+  }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     const err = new Error('getUserMedia indisponível'); err.name = window.isSecureContext ? 'NotSupportedError' : 'SecurityError'; throw err;
   }
   const facing = front ? 'user' : 'environment';
-  const video = { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } };
+  const P = window.GSPerf || { camW: 1920, camH: 1080 };
+  const video = { facingMode: { ideal: facing }, width: { ideal: P.camW }, height: { ideal: P.camH } };
   /* Traseira: pede "exact" primeiro — com "ideal" alguns celulares ainda
      abriam a frontal. Sem câmera traseira (notebook), cai para o "ideal". */
   if (!front) {
@@ -85,6 +92,7 @@ async function initCamera() {
     requestAnimationFrame(resizeFxCanvas);
     applyLivePreview(currentFilter);
     applyContinuousAF();
+    resetExposure();
     if (flashEnabled) applyTorch(true);
     if (zoomLevel !== 1) setZoom(zoomLevel);
     showPinchHint();
@@ -157,7 +165,7 @@ async function flipCamera() {
   if (flashEnabled) applyTorch(true);
   if (zoomLevel !== 1) setZoom(zoomLevel);
   if (window.Scan3D) Scan3D.onCameraChanged();
-  if (currentMode === 'noite') setTrackExposure(Math.max(evLevel, 1.5));
+  if (currentMode === 'noite') setTrackExposure(1.5); else setTrackExposure(0);
   cameraBusy = false;
   toast(useFront ? '🤳 Câmera frontal' : '📷 Câmera traseira');
 }
@@ -368,20 +376,32 @@ function toggleEvStrip() {
   document.getElementById('evStrip').classList.toggle('hidden', !evStripVisible);
 }
 
+/* CORREÇÃO (EV): antes o EV só mexia na compensação de exposição da câmera,
+   que a maioria dos Android e todos os iPhone não oferecem pelo navegador —
+   o controle andava e nada mudava; e onde existia, cada aparelho usava uma
+   escala diferente (e às vezes a câmera já abria fora do 0). Agora o EV é
+   aplicado pelo próprio app, igual em todos os celulares: na prévia (brilho)
+   e na foto (mesmo ajuste, pixel a pixel). A compensação da câmera fica
+   neutra (só o modo Noite a aumenta). */
+function evFactor(ev) { return Math.pow(2, (ev || 0) / 2); }   /* +2 EV = 2× mais claro, −2 EV = metade */
 function setExposure(val) {
-  evLevel = parseFloat(val) || 0;
-  document.getElementById('evVal').textContent = evLevel > 0 ? '+'+evLevel.toFixed(1) : evLevel.toFixed(1);
-  document.getElementById('evBadge').textContent = 'EV ' + (evLevel > 0 ? '+' : '') + evLevel.toFixed(1);
-  document.getElementById('evBadge').classList.toggle('hidden', evLevel === 0);
-  if (stream) {
-    const track = stream.getVideoTracks()[0];
-    if (!track || !track.getCapabilities) return;
-    const caps = track.getCapabilities();
-    if (caps.exposureCompensation) {
-      const v = Math.min(caps.exposureCompensation.max, Math.max(caps.exposureCompensation.min, evLevel));
-      track.applyConstraints({ advanced:[{ exposureCompensation: v }] }).catch(()=>{});
-    }
-  }
+  let v = parseFloat(val);
+  if (!isFinite(v)) v = 0;
+  v = Math.max(-2, Math.min(2, Math.round(v * 10) / 10));
+  if (Math.abs(v) < 0.05) v = 0;
+  evLevel = v;
+  const sl = document.getElementById('evSlider');
+  if (sl && Math.abs(+sl.value - v) > 0.001) sl.value = v;
+  const txt = (v > 0 ? '+' : '') + v.toFixed(1);
+  document.getElementById('evVal').textContent = txt;
+  document.getElementById('evBadge').textContent = 'EV ' + txt;
+  document.getElementById('evBadge').classList.toggle('hidden', v === 0);
+  if (typeof paintPreviewCss === 'function') paintPreviewCss();
+}
+/* toda vez que a câmera abre: EV volta a 0.0 e a compensação da câmera fica neutra */
+function resetExposure() {
+  setExposure(0);
+  if (currentMode !== 'noite' && typeof setTrackExposure === 'function') setTrackExposure(0);
 }
 
 

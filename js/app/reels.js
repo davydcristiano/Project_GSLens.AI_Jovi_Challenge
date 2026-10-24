@@ -256,7 +256,7 @@ const GSReel = (() => {
       $('reelMotion').onclick = () => { c.motion = !c.motion; renderPanel(); paint(); };
       $('reelLeft').onclick = () => move(i, -1);
       $('reelRight').onclick = () => move(i, 1);
-      $('reelDup').onclick = () => { R.clips.splice(i + 1, 0, { ...c, id: nextId++ }); R.sel = i + 1; renderAll(); };
+      $('reelDup').onclick = () => { R.clips.splice(i + 1, 0, Object.assign({}, c, { id: nextId++ })); R.sel = i + 1; renderAll(); };
       $('reelDel').onclick = () => { R.clips.splice(i, 1); if (R.clips[0]) R.clips[0].trans = 'none'; R.sel = -1; R.panel = null; R.t = Math.min(R.t, total()); renderAll(); toast('Foto removida da montagem'); };
     } else if (R.panel === 'music' && R.music) {
       const m = R.music, maxStart = Math.max(0, m.buffer.duration - Math.min(total(), m.buffer.duration));

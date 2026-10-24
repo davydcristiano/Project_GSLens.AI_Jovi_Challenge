@@ -204,7 +204,8 @@
     u32(v) { this.ensure(4); this.dv.setUint32(this.pos, v, true); this.pos += 4; }
     i16(v) { this.ensure(2); this.dv.setInt16(this.pos, v, true); this.pos += 2; }
     i32(v) { this.ensure(4); this.dv.setInt32(this.pos, v, true); this.pos += 4; }
-    i64(v) { this.ensure(8); this.dv.setBigInt64(this.pos, BigInt(v), true); this.pos += 8; }
+    /* 64 bits sem BigInt (Chrome < 67): dois inteiros de 32 bits (valores até 2^53) */
+    i64(v) { this.ensure(8); const lo = v % 4294967296, hi = Math.floor(v / 4294967296); this.dv.setUint32(this.pos, lo < 0 ? lo + 4294967296 : lo, true); this.dv.setInt32(this.pos + 4, hi, true); this.pos += 8; }
     f32(v) { this.ensure(4); this.dv.setFloat32(this.pos, v, true); this.pos += 4; }
     f64(v) { this.ensure(8); this.dv.setFloat64(this.pos, v, true); this.pos += 8; }
     bytes(b) { this.ensure(b.length); this.buf.set(b, this.pos); this.pos += b.length; }
