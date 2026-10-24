@@ -123,8 +123,19 @@ module.exports = {
     }, page);
 
     await t.step('exportar PDF', async () => {
-      await page.click('.etab[data-tab="export"]');
-      const [dl] = await Promise.all([page.waitForEvent('download'), page.click('.export-card:has-text("PDF + Fundo Branco")')]);
+      const tabs = await page.$$eval('.etab', b => b.filter(x => x.offsetParent).map(x => x.textContent.trim()));
+      t.check('abas na ordem Ajustes, Auto, Recortar, Aa, Moldura, Desenho, Efeitos', tabs.join() === 'Ajustes,Auto,Recortar,Aa,Moldura,Desenho,Efeitos', tabs);
+      const fit = await page.$eval('.edit-tabs', e => ({ sw: e.scrollWidth, cw: e.clientWidth }));
+      t.check('as 7 abas cabem sem rolar', fit.sw <= fit.cw + 1, fit);
+      t.check('aviso do texto some fora da aba Aa', await page.evaluate(() => document.getElementById('wtHint').classList.contains('hidden')));
+      const pos = await page.evaluate(() => { const b = document.getElementById('exportBtnEdit').getBoundingClientRect(), m = document.getElementById('modalMeta').getBoundingClientRect(); return { above: b.bottom <= m.top + 1, round: Math.abs(b.width - b.height) < 1 }; });
+      t.check('botão circular Export acima do tamanho da foto', pos.above && pos.round, pos);
+      await page.click('#exportBtnEdit');
+      const items = await page.$$eval('#exportMenu .xp-item b', b => b.filter(x => x.offsetParent).map(x => x.textContent));
+      t.check('menu Export com as 5 opções', items.join('|') === 'Baixar|Compartilhar|PDF · Fundo branco|PDF + Fundo branco|Excluir', items);
+      await t.shot(page, '03_menu_export.png');
+      const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#exportMenu .xp-item:has-text("PDF + Fundo branco")')]);
+      t.check('menu fecha após escolher', await page.evaluate(() => !exportMenuOpen()));
       const f = path.join(t.outDir, dl.suggestedFilename()); await dl.saveAs(f);
       t.check('PDF válido baixado', fs.readFileSync(f).slice(0, 5).toString() === '%PDF-');
     }, page);

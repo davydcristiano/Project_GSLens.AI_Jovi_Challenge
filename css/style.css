@@ -805,8 +805,8 @@ body.theme-light .scan-viewer{ background:radial-gradient(circle at 50% 40%, #ff
 .dash-list{ list-style:none; padding:0; margin:0; font-size:.8rem; }
 .dash-list li{ display:flex; justify-content:space-between; padding:5px 0; border-bottom:1px solid var(--line); }
 
-/* Modal de vídeo: só a aba Exportar faz sentido */
-#editModal.is-video .etab:not([data-tab="export"]){ display:none; }
+/* Modal de vídeo: sem abas de edição, só as opções de exportação */
+#editModal.is-video .edit-tabs{ display:none; }
 
 @media (max-width:899.98px){
   .scan-result{ grid-template-columns:minmax(0,1fr); }
@@ -1077,3 +1077,50 @@ body.sheet-open{ overflow:hidden; }
   transform:translate(-50%,-50%); border:3px solid #fff; box-shadow:0 1px 6px rgba(0,0,0,.5);
   pointer-events:none;
 }
+
+
+/* ═══════════════════════
+   BOTÃO CIRCULAR "EXPORT" DO EDITOR (acima do tamanho da foto)
+═══════════════════════ */
+.xp-btn{
+  position:absolute; right:10px; bottom:38px; z-index:15;
+  width:60px; height:60px; border-radius:50%; padding:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px;
+  background:rgba(11,13,18,.72); color:#fff; border:2px solid var(--accent);
+  box-shadow:0 4px 14px rgba(0,0,0,.45); backdrop-filter:blur(4px); -webkit-backdrop-filter:blur(4px);
+  font-size:.62rem; font-weight:700; letter-spacing:.02em; cursor:pointer;
+  transition:transform .12s, background .12s;
+}
+.xp-btn svg{ color:var(--accent); }
+.xp-btn:hover,.xp-btn[aria-expanded="true"]{ background:var(--accent); color:#00151a; }
+.xp-btn:hover svg,.xp-btn[aria-expanded="true"] svg{ color:#00151a; }
+.xp-btn:active{ transform:scale(.94); }
+.xp-btn:focus-visible{ outline:2px solid #fff; outline-offset:3px; }
+.xp-menu{
+  position:fixed; z-index:1150; width:260px; padding:6px;
+  background:var(--panel); border:1px solid var(--line); border-radius:16px;
+  box-shadow:0 14px 40px rgba(0,0,0,.5); display:flex; flex-direction:column; gap:2px;
+}
+.xp-menu.hidden{ display:none; }
+.xp-menu.is-video .photo-only{ display:none; }
+.xp-item{
+  display:flex; align-items:center; gap:12px; width:100%; min-height:48px;
+  background:transparent; border:none; border-radius:11px; padding:6px 10px;
+  color:var(--text); text-align:left; cursor:pointer;
+}
+.xp-item:hover,.xp-item:focus-visible{ background:var(--bg-alt); outline:none; }
+.xp-ic{
+  width:34px; height:34px; flex-shrink:0; border-radius:10px;
+  display:flex; align-items:center; justify-content:center;
+  background:rgba(0,229,255,.12); color:var(--accent);
+}
+.xp-txt{ display:flex; flex-direction:column; line-height:1.2; }
+.xp-txt b{ font-size:.86rem; font-weight:600; }
+.xp-txt small{ font-size:.7rem; color:var(--muted); }
+.xp-item.danger .xp-ic{ background:rgba(255,77,77,.12); color:var(--danger); }
+.xp-item.danger b{ color:var(--danger); }
+.etab[data-tab="text"] .etab-aa{ font-size:.95rem; margin:0; }
+/* 7 abas cabem inteiras na largura do celular, sem rolar */
+.edit-tabs{ padding:0 4px; }
+.edit-tabs .etab{ flex:1 0 auto; padding:.6rem .45rem; font-size:.78rem; }
+@media (max-width:374.98px){ .edit-tabs .etab{ padding:.6rem .3rem; font-size:.72rem; } }

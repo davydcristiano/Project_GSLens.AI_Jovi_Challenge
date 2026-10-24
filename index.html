@@ -18,17 +18,17 @@
        com boa aparência mesmo sem baixar fontes externas. -->
 
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
-  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261024a">
+  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261024b">
 
   <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
        PDF em lote e pela prancha imprimível do Scanner 3D.
        Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
        a tela mostra os mesmos dados em lista em vez de quebrar. -->
-  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261024a" defer></script>
+  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261024b" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
-  <link rel="stylesheet" href="css/style.css?v=20261024a">
+  <link rel="stylesheet" href="css/style.css?v=20261024b">
 </head>
 
 <body class="theme-dark">
@@ -444,6 +444,11 @@
         <img id="modalImg" alt="">
         <video id="modalVideo" class="hidden" controls></video>
         <div class="modal-meta" id="modalMeta"></div>
+        <!-- Botão circular Export (substitui a aba Exportar) -->
+        <button class="xp-btn" id="exportBtnEdit" type="button" onclick="toggleExportMenu()" aria-haspopup="menu" aria-expanded="false" aria-controls="exportMenu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg>
+          <span>Export</span>
+        </button>
         <div id="cropOverlay" class="crop-overlay hidden">
           <div id="cropBox" class="crop-box"></div>
           <p class="crop-tip-overlay">Arraste para recortar</p>
@@ -459,13 +464,12 @@
       <!-- Abas -->
       <div class="edit-tabs d-flex overflow-auto scroll-row" role="tablist" aria-label="Ferramentas de edição">
         <button class="btn etab active" role="tab" data-tab="adjust" onclick="openTab('adjust',this)">Ajustes</button>
-        <button class="btn etab" role="tab" data-tab="effects" onclick="openTab('effects',this)">Efeitos</button>
+        <button class="btn etab" role="tab" data-tab="ai" onclick="openTab('ai',this)">Auto</button>
         <button class="btn etab" role="tab" data-tab="crop" onclick="openTab('crop',this)">Recortar</button>
-        <button class="btn etab" role="tab" data-tab="draw" onclick="openTab('draw',this)">Desenho</button>
-        <button class="btn etab" role="tab" data-tab="text" onclick="openTab('text',this)"><b class="etab-aa">Aa</b> Texto</button>
+        <button class="btn etab" role="tab" data-tab="text" onclick="openTab('text',this)" aria-label="Texto"><b class="etab-aa">Aa</b></button>
         <button class="btn etab" role="tab" data-tab="frame" onclick="openTab('frame',this)">Moldura</button>
-        <button class="btn etab" role="tab" data-tab="ai" onclick="openTab('ai',this)">🤖 Auto</button>
-        <button class="btn etab" role="tab" data-tab="export" onclick="openTab('export',this)">Exportar</button>
+        <button class="btn etab" role="tab" data-tab="draw" onclick="openTab('draw',this)">Desenho</button>
+        <button class="btn etab" role="tab" data-tab="effects" onclick="openTab('effects',this)">Efeitos</button>
       </div>
 
       <!-- AJUSTES -->
@@ -587,7 +591,7 @@
         </div>
       </div>
 
-      <!-- EXPORTAR -->
+      <!-- EXPORTAR — só para vídeos (fotos usam o botão circular Export) -->
       <div class="epanel hidden" id="panelExport">
         <div class="export-grid">
           <button class="btn export-card" onclick="exportPDF(false)">
@@ -609,6 +613,14 @@
       </div>
 
     </div><!-- /modal-sheet -->
+
+    <div class="xp-menu hidden" id="exportMenu" role="menu" aria-label="Exportar">
+      <button class="xp-item" role="menuitem" onclick="runExport('download')"><span class="xp-ic" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg></span><span class="xp-txt"><b id="xpDownloadLabel">Baixar</b><small id="xpDownloadSub">JPG em alta qualidade</small></span></button>
+      <button class="xp-item" role="menuitem" onclick="runExport('share')"><span class="xp-ic" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg></span><span class="xp-txt"><b>Compartilhar</b><small>WhatsApp, Instagram e outros</small></span></button>
+      <button class="xp-item photo-only" role="menuitem" onclick="runExport('pdf')"><span class="xp-ic" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg></span><span class="xp-txt"><b>PDF · Fundo branco</b><small>Foto numa folha A4 branca</small></span></button>
+      <button class="xp-item photo-only" role="menuitem" onclick="runExport('pdfwhite')"><span class="xp-ic" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M9 15h6M12 12v6"/></svg></span><span class="xp-txt"><b>PDF + Fundo branco</b><small>Clareia o fundo da foto antes</small></span></button>
+      <button class="xp-item danger" role="menuitem" onclick="runExport('delete')"><span class="xp-ic" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg></span><span class="xp-txt"><b>Excluir</b><small>Não pode ser desfeito</small></span></button>
+    </div>
 
     <!-- Compositor de texto em tela cheia (como ao escrever no status do WhatsApp) -->
     <div id="wtComposer" class="wt-composer hidden" role="dialog" aria-modal="true" aria-label="Escrever texto">
@@ -788,44 +800,44 @@
 
   <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
   <!-- Leitor de QR (jsQR, Apache-2.0) + filtros e molduras + leitor de links -->
-  <script src="js/vendor/jsqr/jsQR.js?v=20261024a" defer></script>
-  <script src="js/gpuframe.js?v=20261024a"></script>
-  <script src="js/filters.js?v=20261024a"></script>
-  <script src="js/frames.js?v=20261024a"></script>
-  <script src="js/links/linkscan.js?v=20261024a"></script>
-  <script src="js/nightslow.js?v=20261024a"></script>
-  <script src="js/portrait/tflite.js?v=20261024a"></script>
-  <script src="js/portrait/portrait.js?v=20261024a"></script>
-  <script src="js/vendor/aruco/cv.js?v=20261024a"></script>
-  <script src="js/vendor/aruco/aruco.js?v=20261024a"></script>
+  <script src="js/vendor/jsqr/jsQR.js?v=20261024b" defer></script>
+  <script src="js/gpuframe.js?v=20261024b"></script>
+  <script src="js/filters.js?v=20261024b"></script>
+  <script src="js/frames.js?v=20261024b"></script>
+  <script src="js/links/linkscan.js?v=20261024b"></script>
+  <script src="js/nightslow.js?v=20261024b"></script>
+  <script src="js/portrait/tflite.js?v=20261024b"></script>
+  <script src="js/portrait/portrait.js?v=20261024b"></script>
+  <script src="js/vendor/aruco/cv.js?v=20261024b"></script>
+  <script src="js/vendor/aruco/aruco.js?v=20261024b"></script>
   <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
-  <script src="js/scan3d/math.js?v=20261024a"></script>
-  <script src="js/scan3d/board.js?v=20261024a"></script>
-  <script src="js/scan3d/tracker.js?v=20261024a"></script>
-  <script src="js/scan3d/features.js?v=20261024a"></script>
-  <script src="js/scan3d/surface.js?v=20261024a"></script>
-  <script src="js/scan3d/segment.js?v=20261024a"></script>
-  <script src="js/scan3d/reconstruct.js?v=20261024a"></script>
-  <script src="js/scan3d/texture.js?v=20261024a"></script>
-  <script src="js/scan3d/pipeline.js?v=20261024a"></script>
-  <script src="js/scan3d/exporters.js?v=20261024a"></script>
-  <script src="js/scan3d/viewer.js?v=20261024a"></script>
-  <script src="js/scan3d/app.js?v=20261024a"></script>
+  <script src="js/scan3d/math.js?v=20261024b"></script>
+  <script src="js/scan3d/board.js?v=20261024b"></script>
+  <script src="js/scan3d/tracker.js?v=20261024b"></script>
+  <script src="js/scan3d/features.js?v=20261024b"></script>
+  <script src="js/scan3d/surface.js?v=20261024b"></script>
+  <script src="js/scan3d/segment.js?v=20261024b"></script>
+  <script src="js/scan3d/reconstruct.js?v=20261024b"></script>
+  <script src="js/scan3d/texture.js?v=20261024b"></script>
+  <script src="js/scan3d/pipeline.js?v=20261024b"></script>
+  <script src="js/scan3d/exporters.js?v=20261024b"></script>
+  <script src="js/scan3d/viewer.js?v=20261024b"></script>
+  <script src="js/scan3d/app.js?v=20261024b"></script>
   <!-- App (antes um único script.js de 2.300 linhas), na ordem de dependência -->
-  <script src="js/app/core.js?v=20261024a"></script>
-  <script src="js/app/camera.js?v=20261024a"></script>
-  <script src="js/app/camera-filters.js?v=20261024a"></script>
-  <script src="js/app/modes.js?v=20261024a"></script>
-  <script src="js/app/recording.js?v=20261024a"></script>
-  <script src="js/app/live-fx.js?v=20261024a"></script>
-  <script src="js/app/capture.js?v=20261024a"></script>
-  <script src="js/app/gallery.js?v=20261024a"></script>
-  <script src="js/app/editor.js?v=20261024a"></script>
-  <script src="js/app/text-story.js?v=20261024a"></script>
-  <script src="js/app/analysis.js?v=20261024a"></script>
-  <script src="js/app/share-export.js?v=20261024a"></script>
-  <script src="js/app/dashboard.js?v=20261024a"></script>
-  <script src="js/app/main.js?v=20261024a"></script>
+  <script src="js/app/core.js?v=20261024b"></script>
+  <script src="js/app/camera.js?v=20261024b"></script>
+  <script src="js/app/camera-filters.js?v=20261024b"></script>
+  <script src="js/app/modes.js?v=20261024b"></script>
+  <script src="js/app/recording.js?v=20261024b"></script>
+  <script src="js/app/live-fx.js?v=20261024b"></script>
+  <script src="js/app/capture.js?v=20261024b"></script>
+  <script src="js/app/gallery.js?v=20261024b"></script>
+  <script src="js/app/editor.js?v=20261024b"></script>
+  <script src="js/app/text-story.js?v=20261024b"></script>
+  <script src="js/app/analysis.js?v=20261024b"></script>
+  <script src="js/app/share-export.js?v=20261024b"></script>
+  <script src="js/app/dashboard.js?v=20261024b"></script>
+  <script src="js/app/main.js?v=20261024b"></script>
 </body>
 
 </html>

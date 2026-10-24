@@ -34,7 +34,8 @@ function openEditModal(idx) {
     +(p.night?` · Noite: ${p.night.used} quadros, ganho ${p.night.gain}×`:'');
   document.getElementById('jpgLabel').textContent = isVideo ? 'Baixar vídeo' : 'Baixar JPG';
   resetEditState();
-  openTab(isVideo?'export':'adjust',document.querySelector(`.etab[data-tab="${isVideo?'export':'adjust'}"]`));
+  /* vídeo: sem abas de edição, só as opções de exportação; foto: abre em Ajustes */
+  openTab(isVideo?'export':'adjust',isVideo?null:document.querySelector('.etab[data-tab="adjust"]'));
   document.getElementById('aiResult').classList.add('hidden');
   clearDrawCanvas();
   setupCropEvents();
@@ -57,6 +58,7 @@ function closeModal(fromHistory) {
   if (document.getElementById('editModal').classList.contains('hidden')) return;
   /* textos ainda soltos sobre a foto são incorporados antes de fechar */
   if (currentTab==='text') WText.close();
+  toggleExportMenu(false);
   /* ajuste feito há menos de 280 ms: aplica em resolução cheia antes de fechar */
   if (_fullTimer) { clearTimeout(_fullTimer); _fullTimer=null; renderEdits(); }
   flushSave();

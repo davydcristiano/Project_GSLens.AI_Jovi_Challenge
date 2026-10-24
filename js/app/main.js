@@ -40,7 +40,8 @@ function onKeyDown(e) {
   if (help && !help.classList.contains('hidden')) { Scan3D.hideHelp(); return; }
   if (!document.getElementById('webSheet').classList.contains('hidden')) return;   /* tratado pelo leitor de links */
   if (!document.getElementById('batchModal').classList.contains('hidden')) { closeBatchModal(); return; }
-  if (window.WText && WText.isComposing()) { WText.done(); return; }   /* Esc conclui o texto em edição */
+  if (window.WText && WText.isComposing()) { WText.done(); return; }
+  if (typeof exportMenuOpen==='function' && exportMenuOpen()) return;   /* tratado pelo menu Export */   /* Esc conclui o texto em edição */
   if (!document.getElementById('editModal').classList.contains('hidden')) closeModal();
 }
 

@@ -2,7 +2,7 @@
    Estratégia "rede primeiro, cache como reserva": sempre busca a versão
    mais nova quando há conexão (evita servir código desatualizado após
    atualizações) e permite abrir o app offline com o que já foi carregado. */
-const CACHE = 'gslens-v16';
+const CACHE = 'gslens-v17';
 const CORE = [
   './', './index.html', './manifest.webmanifest',
   './css/style.css', './css/vendor/bootstrap4.local.css',

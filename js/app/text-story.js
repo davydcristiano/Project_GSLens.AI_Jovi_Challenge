@@ -420,8 +420,8 @@ const WText = (() => {
   function close(opts) {
     cancel();
     if (items.length && !(opts && opts.discard)) apply(true);
+    active = false;            /* antes de limpar: senão o aviso "Toque na foto" voltava a aparecer */
     clearItems();
-    active = false;
     const ly = layer(); if (ly) ly.classList.add('hidden');
     showTrash(false);
     ptrs.clear(); g = null;

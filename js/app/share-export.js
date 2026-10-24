@@ -81,3 +81,57 @@ function deletePhoto() {
   updateThumbFromPhotos();
   toast(t('deleted'));
 }
+
+
+/* ══════════════════════════════════════
+   BOTÃO CIRCULAR "EXPORT" DO EDITOR
+   Substitui a aba Exportar: Baixar, Compartilhar, PDF (fundo branco),
+   PDF + Fundo branco (aplica antes) e Excluir num menu que abre do botão.
+══════════════════════════════════════ */
+function exportMenuOpen(){ return !document.getElementById('exportMenu').classList.contains('hidden'); }
+
+function toggleExportMenu(force){
+  const menu=document.getElementById('exportMenu'), btn=document.getElementById('exportBtnEdit');
+  const open = force!==undefined ? force : !exportMenuOpen();
+  if(!open){ menu.classList.add('hidden'); btn.setAttribute('aria-expanded','false'); return; }
+  const p=photos[editingIdx]; if(!p) return;
+  const isVideo=p.type==='video';
+  menu.classList.toggle('is-video',isVideo);
+  document.getElementById('xpDownloadLabel').textContent=isVideo?'Baixar vídeo':'Baixar';
+  document.getElementById('xpDownloadSub').textContent=isVideo?'Arquivo de vídeo original':'JPG em alta qualidade';
+  menu.classList.remove('hidden');
+  btn.setAttribute('aria-expanded','true');
+  /* abre acima do botão, alinhado à direita dele; se não couber, abre abaixo */
+  const r=btn.getBoundingClientRect(), mh=menu.offsetHeight, mw=menu.offsetWidth, m=8;
+  let top=r.top-mh-m; if(top<m) top=Math.min(window.innerHeight-mh-m, r.bottom+m);
+  const left=Math.max(m, Math.min(window.innerWidth-mw-m, r.right-mw));
+  menu.style.top=top+'px'; menu.style.left=left+'px';
+  const first=menu.querySelector('.xp-item:not([hidden])'); if(first) first.focus({preventScroll:true});
+}
+
+async function runExport(kind){
+  toggleExportMenu(false);
+  /* textos soltos e ajuste recém-movido entram no arquivo exportado */
+  if(currentTab==='text' && WText.count) WText.apply(true);
+  if(_fullTimer){ clearTimeout(_fullTimer); _fullTimer=null; await renderEdits(); }
+  if(kind==='download') downloadJPG();
+  else if(kind==='share') sharePhoto();
+  else if(kind==='pdf') exportPDF(false);
+  else if(kind==='pdfwhite') exportPDF(true);
+  else if(kind==='delete') deletePhoto();
+}
+
+document.addEventListener('pointerdown',e=>{
+  if(!exportMenuOpen()) return;
+  if(e.target.closest('#exportMenu,#exportBtnEdit')) return;
+  toggleExportMenu(false);
+},true);
+document.addEventListener('keydown',e=>{
+  if(!exportMenuOpen()) return;
+  const items=[...document.querySelectorAll('#exportMenu .xp-item')].filter(b=>b.offsetParent);
+  const i=items.indexOf(document.activeElement);
+  if(e.key==='Escape'){ e.stopPropagation(); e.preventDefault(); toggleExportMenu(false); document.getElementById('exportBtnEdit').focus(); }
+  else if(e.key==='ArrowDown'){ e.preventDefault(); items[(i+1)%items.length].focus(); }
+  else if(e.key==='ArrowUp'){ e.preventDefault(); items[(i-1+items.length)%items.length].focus(); }
+},true);
+window.addEventListener('resize',()=>{ if(exportMenuOpen()) toggleExportMenu(false); });

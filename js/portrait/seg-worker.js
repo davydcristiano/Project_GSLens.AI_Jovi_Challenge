@@ -6,7 +6,7 @@
      → { type:'run', id, model:'square'|'landscape', rgba:Uint8ClampedArray }
      ← { type:'mask', id, mask:Float32Array, w, h, ms } */
 'use strict';
-importScripts('tflite.js?v=20261024a');
+importScripts('tflite.js?v=20261024b');
 
 const MODELS = { square: 'models/selfie_segmentation.tflite', landscape: 'models/selfie_segmentation_landscape.tflite' };
 const nets = {};
