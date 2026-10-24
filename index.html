@@ -18,17 +18,17 @@
        com boa aparência mesmo sem baixar fontes externas. -->
 
   <!-- Bootstrap 4.6 — LOCAL, sem CDN (ver css/vendor/bootstrap4.local.css) -->
-  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261024b">
+  <link rel="stylesheet" href="css/vendor/bootstrap4.local.css?v=20261024c">
 
   <!-- jsPDF 2.5.1 — agora LOCAL (js/vendor/jspdf), usado por "Gerar PDF",
        PDF em lote e pela prancha imprimível do Scanner 3D.
        Chart.js continua via CDN (só a tela de Estatísticas usa); sem rede,
        a tela mostra os mesmos dados em lista em vez de quebrar. -->
-  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261024b" defer></script>
+  <script src="js/vendor/jspdf/jspdf.umd.min.js?v=20261024c" defer></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" defer></script>
 
   <!-- Tema próprio -->
-  <link rel="stylesheet" href="css/style.css?v=20261024b">
+  <link rel="stylesheet" href="css/style.css?v=20261024c">
 </head>
 
 <body class="theme-dark">
@@ -85,6 +85,7 @@
           </svg>
           Galeria
         </button>
+        <button class="btn btn-sm quicklink" onclick="GSReel.open(null,'home')">🎬 Montagem</button>
         <button class="btn btn-sm quicklink" onclick="openDashboard()">📊 Estatísticas</button>
         <button class="btn btn-sm quicklink" onclick="toggleTheme()">🌗 Tema</button>
       </div>
@@ -376,7 +377,8 @@
       <h2 class="gal-title mb-0 ml-2">Galeria</h2>
       <div class="ml-auto d-flex align-items-center">
         <span id="galCount" class="gal-count mr-2" aria-live="polite">0 fotos</span>
-        <button class="btn gal-action-btn" id="selectModeBtn" onclick="toggleSelectMode()">Selecionar</button>
+        <button class="btn gal-action-btn reel-entry" id="reelOpenBtn" onclick="GSReel.openFromGallery()" title="Criar vídeo com fotos e música" aria-label="Montagem"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M10 9l5 3-5 3z"/></svg><span class="lbl">Montagem</span></button>
+        <button class="btn gal-action-btn ml-1" id="selectModeBtn" onclick="toggleSelectMode()">Selecionar</button>
       </div>
     </div>
 
@@ -394,7 +396,8 @@
     <div class="batch-bar hidden" id="batchBar">
       <span id="selectedCount">0 selecionados</span>
       <div class="batch-actions">
-        <button class="btn btn-sm btn-accent" onclick="batchPDF()">📄 PDF</button>
+        <button class="btn btn-sm btn-accent" onclick="GSReel.openFromGallery()">🎬 Montagem</button>
+        <button class="btn btn-sm btn-outline-light" onclick="batchPDF()">📄 PDF</button>
         <button class="btn btn-sm btn-outline-danger" onclick="batchDelete()">🗑️ Excluir</button>
         <button class="btn btn-sm btn-outline-light" onclick="cancelSelectMode()">✕ Cancelar</button>
       </div>
@@ -424,6 +427,103 @@
       <!-- injetado via JS -->
     </div>
   </div>
+
+
+  <!-- ═══════════════════════════════════════
+       MONTAGEM (timeline de fotos + música, estilo Reels) — js/app/reels.js
+  ═══════════════════════════════════════ -->
+  <div id="reelScreen" class="app-screen screen-hidden reel-screen">
+    <div class="reel-top">
+      <button class="btn back-btn" onclick="GSReel.close()" aria-label="Voltar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+      </button>
+      <h2 class="gal-title mb-0 ml-2">Montagem</h2>
+      <button class="btn reel-new ml-auto" onclick="GSReel.clearAll()" title="Começar de novo">Nova</button>
+      <button class="btn reel-export" id="reelExportBtn" onclick="GSReel.exportVideo()" disabled>Exportar</button>
+    </div>
+
+    <div class="reel-stage" id="reelStage">
+      <canvas id="reelCanvas" width="720" height="1280" aria-label="Prévia da montagem"></canvas>
+      <div class="reel-empty" id="reelEmpty">
+        <p>Escolha as fotos da sua montagem</p>
+        <button class="btn btn-accent" onclick="GSReel.openPicker()">+ Adicionar fotos</button>
+      </div>
+    </div>
+
+    <div class="reel-transport">
+      <button class="reel-play" id="reelPlay" onclick="GSReel.togglePlay()" aria-label="Reproduzir" disabled>
+        <svg class="i-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"/></svg>
+        <svg class="i-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+      </button>
+      <span class="reel-time" id="reelTime" aria-live="off">0:00 / 0:00</span>
+      <div class="reel-aspects ml-auto" role="group" aria-label="Formato do vídeo">
+        <button class="btn reel-aspect active" data-a="9:16" aria-pressed="true" onclick="GSReel.setAspect('9:16')">9:16</button>
+        <button class="btn reel-aspect" data-a="1:1" aria-pressed="false" onclick="GSReel.setAspect('1:1')">1:1</button>
+        <button class="btn reel-aspect" data-a="16:9" aria-pressed="false" onclick="GSReel.setAspect('16:9')">16:9</button>
+      </div>
+    </div>
+
+    <div class="reel-tl-wrap">
+      <div class="reel-timeline" id="reelTimeline" aria-label="Linha do tempo: arraste para avançar ou voltar">
+        <div class="reel-tl-inner" id="reelTlInner">
+          <div class="reel-ruler" id="reelRuler" aria-hidden="true"></div>
+          <div class="reel-track" id="reelTrack"></div>
+          <button class="btn reel-audio hidden" id="reelAudio" type="button" aria-label="Música: abrir ajustes">
+            <span class="reel-audio-name" id="reelAudioName"></span>
+            <canvas id="reelWave" aria-hidden="true"></canvas>
+          </button>
+          <button class="btn reel-add-music" id="reelAddMusic" type="button" onclick="GSReel.openMusic()">♪ Toque para adicionar música</button>
+        </div>
+      </div>
+      <div class="reel-playhead" aria-hidden="true"></div>
+    </div>
+
+    <div class="reel-panel hidden" id="reelPanel"></div>
+
+    <div class="reel-tools">
+      <button class="btn reel-tool" onclick="GSReel.openPicker()"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg><span>Fotos</span></button>
+      <button class="btn reel-tool" onclick="GSReel.openMusic()"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>Música</span></button>
+      <button class="btn reel-tool" onclick="GSReel.togglePlay()"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 8l6 4-6 4z"/></svg><span>Prévia</span></button>
+      <button class="btn reel-tool accent" onclick="GSReel.exportVideo()"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/></svg><span>Exportar</span></button>
+    </div>
+    <input type="file" id="reelMusicInput" accept="audio/*" hidden>
+    <input type="file" id="reelFileInput" accept="image/*" multiple hidden>
+
+    <!-- seletor de fotos -->
+    <div class="modal-overlay hidden" id="reelPicker">
+      <div class="modal-backdrop-custom" onclick="GSReel.closePicker()"></div>
+      <div class="modal-sheet reel-pick-sheet" role="dialog" aria-modal="true" aria-labelledby="reelPickTitle">
+        <div class="modal-handle"></div>
+        <div class="reel-pick-head">
+          <b id="reelPickTitle">Escolha as fotos na ordem</b>
+          <button class="btn gal-action-btn" onclick="document.getElementById('reelFileInput').click()">Do aparelho</button>
+        </div>
+        <p class="reel-pick-empty hidden" id="reelPickEmpty">Ainda não há fotos na galeria. Tire fotos com a câmera ou escolha do aparelho.</p>
+        <div class="reel-pick-grid" id="reelPickGrid"></div>
+        <div class="reel-pick-foot">
+          <button class="btn btn-outline-light" onclick="GSReel.closePicker()">Cancelar</button>
+          <button class="btn btn-accent" id="reelPickAdd" onclick="GSReel.confirmPicker()" disabled>Adicionar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- exportando -->
+    <div class="scan-proc hidden" id="reelProc" role="dialog" aria-modal="true" aria-labelledby="reelProcTitle">
+      <div class="scan-proc-card">
+        <div class="scan-spinner" aria-hidden="true"></div>
+        <div class="scan-proc-title" id="reelProcTitle">Gerando o vídeo</div>
+        <div class="scan-proc-msg">A montagem toca uma vez enquanto é gravada.</div>
+        <div class="scan-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="scan-progress-bar" id="reelProcBar"></div></div>
+        <div class="scan-proc-pct" id="reelProcPct">0%</div>
+        <button class="btn btn-sm btn-outline-light" onclick="GSReel.cancelExport()">✕ Cancelar</button>
+      </div>
+    </div>
+    <div class="reel-done hidden" id="reelDone" role="status">
+      <span>🎬 Vídeo salvo na galeria</span>
+      <button class="btn btn-sm btn-accent" onclick="GSReel.viewExport()">Ver vídeo</button>
+      <button class="btn btn-sm reel-x" onclick="this.parentElement.classList.add('hidden')" aria-label="Fechar aviso">✕</button>
+    </div>
+  </div><!-- /reelScreen -->
 
   <!-- ═══════════════════════════════════════
        MODAL EDIÇÃO
@@ -800,44 +900,45 @@
 
   <!-- Rastreamento de marcadores ArUco (js-aruco2, MIT) -->
   <!-- Leitor de QR (jsQR, Apache-2.0) + filtros e molduras + leitor de links -->
-  <script src="js/vendor/jsqr/jsQR.js?v=20261024b" defer></script>
-  <script src="js/gpuframe.js?v=20261024b"></script>
-  <script src="js/filters.js?v=20261024b"></script>
-  <script src="js/frames.js?v=20261024b"></script>
-  <script src="js/links/linkscan.js?v=20261024b"></script>
-  <script src="js/nightslow.js?v=20261024b"></script>
-  <script src="js/portrait/tflite.js?v=20261024b"></script>
-  <script src="js/portrait/portrait.js?v=20261024b"></script>
-  <script src="js/vendor/aruco/cv.js?v=20261024b"></script>
-  <script src="js/vendor/aruco/aruco.js?v=20261024b"></script>
+  <script src="js/vendor/jsqr/jsQR.js?v=20261024c" defer></script>
+  <script src="js/gpuframe.js?v=20261024c"></script>
+  <script src="js/filters.js?v=20261024c"></script>
+  <script src="js/frames.js?v=20261024c"></script>
+  <script src="js/links/linkscan.js?v=20261024c"></script>
+  <script src="js/nightslow.js?v=20261024c"></script>
+  <script src="js/portrait/tflite.js?v=20261024c"></script>
+  <script src="js/portrait/portrait.js?v=20261024c"></script>
+  <script src="js/vendor/aruco/cv.js?v=20261024c"></script>
+  <script src="js/vendor/aruco/aruco.js?v=20261024c"></script>
   <!-- Scanner 3D (AR) — three.js é carregado sob demanda pelo visualizador -->
-  <script src="js/scan3d/math.js?v=20261024b"></script>
-  <script src="js/scan3d/board.js?v=20261024b"></script>
-  <script src="js/scan3d/tracker.js?v=20261024b"></script>
-  <script src="js/scan3d/features.js?v=20261024b"></script>
-  <script src="js/scan3d/surface.js?v=20261024b"></script>
-  <script src="js/scan3d/segment.js?v=20261024b"></script>
-  <script src="js/scan3d/reconstruct.js?v=20261024b"></script>
-  <script src="js/scan3d/texture.js?v=20261024b"></script>
-  <script src="js/scan3d/pipeline.js?v=20261024b"></script>
-  <script src="js/scan3d/exporters.js?v=20261024b"></script>
-  <script src="js/scan3d/viewer.js?v=20261024b"></script>
-  <script src="js/scan3d/app.js?v=20261024b"></script>
+  <script src="js/scan3d/math.js?v=20261024c"></script>
+  <script src="js/scan3d/board.js?v=20261024c"></script>
+  <script src="js/scan3d/tracker.js?v=20261024c"></script>
+  <script src="js/scan3d/features.js?v=20261024c"></script>
+  <script src="js/scan3d/surface.js?v=20261024c"></script>
+  <script src="js/scan3d/segment.js?v=20261024c"></script>
+  <script src="js/scan3d/reconstruct.js?v=20261024c"></script>
+  <script src="js/scan3d/texture.js?v=20261024c"></script>
+  <script src="js/scan3d/pipeline.js?v=20261024c"></script>
+  <script src="js/scan3d/exporters.js?v=20261024c"></script>
+  <script src="js/scan3d/viewer.js?v=20261024c"></script>
+  <script src="js/scan3d/app.js?v=20261024c"></script>
   <!-- App (antes um único script.js de 2.300 linhas), na ordem de dependência -->
-  <script src="js/app/core.js?v=20261024b"></script>
-  <script src="js/app/camera.js?v=20261024b"></script>
-  <script src="js/app/camera-filters.js?v=20261024b"></script>
-  <script src="js/app/modes.js?v=20261024b"></script>
-  <script src="js/app/recording.js?v=20261024b"></script>
-  <script src="js/app/live-fx.js?v=20261024b"></script>
-  <script src="js/app/capture.js?v=20261024b"></script>
-  <script src="js/app/gallery.js?v=20261024b"></script>
-  <script src="js/app/editor.js?v=20261024b"></script>
-  <script src="js/app/text-story.js?v=20261024b"></script>
-  <script src="js/app/analysis.js?v=20261024b"></script>
-  <script src="js/app/share-export.js?v=20261024b"></script>
-  <script src="js/app/dashboard.js?v=20261024b"></script>
-  <script src="js/app/main.js?v=20261024b"></script>
+  <script src="js/app/core.js?v=20261024c"></script>
+  <script src="js/app/camera.js?v=20261024c"></script>
+  <script src="js/app/camera-filters.js?v=20261024c"></script>
+  <script src="js/app/modes.js?v=20261024c"></script>
+  <script src="js/app/recording.js?v=20261024c"></script>
+  <script src="js/app/live-fx.js?v=20261024c"></script>
+  <script src="js/app/capture.js?v=20261024c"></script>
+  <script src="js/app/gallery.js?v=20261024c"></script>
+  <script src="js/app/editor.js?v=20261024c"></script>
+  <script src="js/app/text-story.js?v=20261024c"></script>
+  <script src="js/app/reels.js?v=20261024c"></script>
+  <script src="js/app/analysis.js?v=20261024c"></script>
+  <script src="js/app/share-export.js?v=20261024c"></script>
+  <script src="js/app/dashboard.js?v=20261024c"></script>
+  <script src="js/app/main.js?v=20261024c"></script>
 </body>
 
 </html>

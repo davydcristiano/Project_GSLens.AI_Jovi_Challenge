@@ -153,7 +153,7 @@ const WText = (() => {
 
   function updateUI() {
     const n = items.length;
-    const hint = $('wtHint'); if (hint) hint.classList.toggle('hidden', !active || n > 0);
+    const hint = $('wtHint'); if (hint) hint.classList.toggle('hidden', !active || n > 0 || !$('wtComposer').classList.contains('hidden'));
     const ap = $('wtApply'); if (ap) ap.disabled = !n;
     const cl = $('wtClear'); if (cl) cl.disabled = !n;
   }

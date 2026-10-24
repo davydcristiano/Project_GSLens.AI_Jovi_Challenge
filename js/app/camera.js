@@ -192,7 +192,7 @@ function openGalleryDirect() {
 }
 
 /* Telas */
-const SCREENS = ['cameraScreen', 'galleryScreen', 'dashboardScreen', 'scanScreen'];
+const SCREENS = ['cameraScreen', 'galleryScreen', 'dashboardScreen', 'scanScreen', 'reelScreen'];
 function hideAllScreens() {
   document.getElementById('homeScreen').style.display = 'none';
   SCREENS.forEach(id => { const el = document.getElementById(id); if (el) el.classList.add('screen-hidden'); });

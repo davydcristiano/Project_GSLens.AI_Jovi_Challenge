@@ -120,7 +120,7 @@ const i18n = {
 const t = k => (i18n['pt-BR'][k] || k);
 
 const MODE_LABELS = { noite:'NOITE', retrato:'RETRATO', foto:'FOTO', video:'VÍDEO', slowmo:'SLOW-MO', ar:'AR · 3D', efeitos:'EFEITOS' };
-const MODE_NAMES  = { noite:'Noite', retrato:'Retrato', foto:'Foto', video:'Vídeo', slowmo:'Slow-Mo', ar:'AR', efeitos:'Efeitos' };
+const MODE_NAMES  = { noite:'Noite', retrato:'Retrato', foto:'Foto', video:'Vídeo', slowmo:'Slow-Mo', ar:'AR', efeitos:'Efeitos', montagem:'Montagem' };
 
 
 /* ══════════════════════════════════════
