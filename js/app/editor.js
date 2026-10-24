@@ -9,6 +9,7 @@
 ══════════════════════════════════════ */
 function openEditModal(idx) {
   if (idx<0 || !photos[idx]) return;
+  if (_fullTimer) { clearTimeout(_fullTimer); _fullTimer=null; }
   editingIdx=idx;
   _fxToken++;            /* cancela qualquer processamento pendente da foto anterior */
   const p=photos[idx];
@@ -52,6 +53,8 @@ function resetEditState() {
 /* CORREÇÃO: fechar o modal deixava o vídeo tocando (com áudio) ao fundo
    e mantinha as edições pendentes. */
 function closeModal() {
+  /* ajuste feito há menos de 280 ms: aplica em resolução cheia antes de fechar */
+  if (_fullTimer) { clearTimeout(_fullTimer); _fullTimer=null; renderEdits(); }
   flushSave();
   const mv=document.getElementById('modalVideo');
   mv.pause(); mv.removeAttribute('src'); mv.load();
@@ -109,25 +112,31 @@ function liveAdjust() {
     const el=document.getElementById('sl'+k);
     if(el) document.getElementById('v'+k).textContent=el.value;
   });
-  /* agrupa os eventos do slider num único processamento por quadro */
+  /* DESEMPENHO: enquanto o controle é arrastado, só uma prévia reduzida
+     (até 720 px) por quadro; a foto em resolução cheia é processada uma vez,
+     quando o dedo para. Antes cada movimento reprocessava a foto inteira. */
+  clearTimeout(_fullTimer);
+  _fullTimer=setTimeout(()=>{ _fullTimer=null; renderEdits(); }, 280);
   if(_adjPending) return;
   _adjPending=true;
-  requestAnimationFrame(()=>{ _adjPending=false; renderEdits(); });
+  requestAnimationFrame(()=>{ _adjPending=false; if(_fullTimer) renderEdits(null, { preview:true }); });
 }
-let _adjPending=false;
+let _adjPending=false, _fullTimer=null;
 
-function renderEdits(doneMsg) {
+function renderEdits(doneMsg, opts) {
+  const preview=!!(opts&&opts.preview);
   const p=photos[editingIdx]; if(!p||p.type==='video') return Promise.resolve();
   const meuToken=++_fxToken;
   const a=readAdjust(), fx=currentEffect, frame=currentFrame, wb=wbGains;
   return carregarOrigemEfeito(originalDataUrl).then(img=>{
     if(meuToken!==_fxToken) return;
-    const W=img.naturalWidth, H=img.naturalHeight;
+    const sc=preview?Math.min(1,720/Math.max(img.naturalWidth,img.naturalHeight)):1;
+    const W=Math.round(img.naturalWidth*sc), H=Math.round(img.naturalHeight*sc);
     const canvas=document.createElement('canvas');
     canvas.width=W; canvas.height=H;
     const ctx=canvas.getContext('2d',{willReadFrequently:true});
-    ctx.filter=a.BL>0?`blur(${a.BL}px)`:'none';
-    ctx.drawImage(img,0,0);
+    ctx.filter=a.BL>0?`blur(${a.BL*sc}px)`:'none';
+    ctx.drawImage(img,0,0,W,H);
     ctx.filter='none';
     if(a.B||a.C||a.S||wb) {
       const id=ctx.getImageData(0,0,W,H), d=id.data;
@@ -149,12 +158,16 @@ function renderEdits(doneMsg) {
     if(fx!=='none') out=renderEffect(out,fx);
     if(frame!=='none') out=renderFrame(out,frame);
     if(meuToken!==_fxToken) return;
-    p.dataUrl=out.toDataURL('image/jpeg',.93);
+    if(preview){ document.getElementById('modalImg').src=out.toDataURL('image/jpeg',.82); return; }
+    return encodeJpeg(out,.93).then(url=>{
+    if(meuToken!==_fxToken) return;
+    p.dataUrl=url;
     p.w=out.width; p.h=out.height;
     document.getElementById('modalImg').src=p.dataUrl;
     document.getElementById('modalMeta').textContent=p.w+'×'+p.h;
     scheduleSave(p);
     if(doneMsg) toast(doneMsg);
+    });
   }).catch(err=>{
     console.error('Edição:',err);
     toast('⚠️ Não foi possível aplicar a edição');

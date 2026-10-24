@@ -88,6 +88,11 @@ async function initCamera() {
     if (flashEnabled) applyTorch(true);
     if (zoomLevel !== 1) setZoom(zoomLevel);
     showPinchHint();
+    /* DESEMPENHO: prepara o WebGL dos filtros quando o aparelho estiver ocioso */
+    if (window.GSFilters && GSFilters.prewarm) {
+      const pw = () => GSFilters.prewarm(document.getElementById('filterCanvas'));
+      if (window.requestIdleCallback) requestIdleCallback(pw, { timeout: 3000 }); else setTimeout(pw, 1500);
+    }
     toast(hasAudio ? t('cameraReady') : '📷 Câmera pronta (sem microfone — vídeos sem áudio)');
     if (currentMode === 'ar' && window.Scan3D) Scan3D.enter();
     if (currentMode === 'efeitos') startFx(currentFx);

@@ -30,6 +30,7 @@ Para o validador independente dos formatos 3D é preciso `python3` + `numpy`
 | `fixtures/` | geradores dos vídeos de câmera (`videos.html`, `synth.js` — cena 3D com pose conhecida), página de teste aberta pelo QR |
 | `unit/` | testes de módulos isolados (matemática e pipeline do scanner 3D) |
 | `e2e/` | testes de ponta a ponta da interface |
+| `perf/` | medições de desempenho: `jank.js` (travadas por funcionalidade), `profile.js` (perfil de CPU) |
 | `vendor/three/` | three.js r160 (módulos ES) e carregadores GLTF/OBJ/STL/FBX — usados só nos testes, para reabrir os modelos exportados |
 
 Os vídeos gerados ficam em `tests/.cache/` e são reaproveitados enquanto os geradores

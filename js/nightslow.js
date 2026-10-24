@@ -128,7 +128,8 @@
     const st = sceneStats(video) || { mean: 60 };
     /* cenas mais escuras → mais quadros */
     const N = st.mean < 25 ? 12 : st.mean < 60 ? 10 : 6;
-    const ref = (grab(), ctx.getImageData(0, 0, w, h));
+    await grab();
+    const ref = ctx.getImageData(0, 0, w, h);
     const refPyr = pyramid(ref.data, w, h);
     const n = w * h;
     const accR = new Float32Array(n), accG = new Float32Array(n), accB = new Float32Array(n), accW = new Float32Array(n);
@@ -138,7 +139,7 @@
     if (onProgress) onProgress(1, N);
     for (let k = 1; k < N; k++) {
       await nextFrame(video);
-      grab();
+      await grab();
       const d = ctx.getImageData(0, 0, w, h).data;
       const a = align(refPyr, d, w, h);
       const { dx, dy } = a;
@@ -303,6 +304,13 @@
     NL.cur = tex();
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);   /* reduz o vídeo ao enviar */
     NL.acc = [tex(), tex()]; NL.fb = [gl.createFramebuffer(), gl.createFramebuffer()];
+    /* miniatura 48×27 (RGBA8) para medir luz e ruído direto da GPU */
+    NL.pS = prog(VSF, 'precision mediump float;varying vec2 uv;uniform sampler2D t;uniform vec2 px;void main(){gl_FragColor=.25*(texture2D(t,uv+px*vec2(-.5,-.5))+texture2D(t,uv+px*vec2(.5,-.5))+texture2D(t,uv+px*vec2(-.5,.5))+texture2D(t,uv+px*vec2(.5,.5)));}', ['t', 'px']);
+    NL.small = tex(); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 48, 27, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    NL.fbS = gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER, NL.fbS);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, NL.small, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    NL.smallPx = new Uint8Array(48 * 27 * 4); NL.lastMeasure = 0;
     NL.fmt = fmt; NL.gl = gl; NL.tex = tex;
     return true;
   }
@@ -332,6 +340,9 @@
   function nlStep() {
     const v = NL.video, gl = NL.gl;
     if (!NL.on || !v || !v.videoWidth || v.readyState < 2) return;
+    /* controle de fluxo: GPU ainda ocupada com o quadro anterior → pula este */
+    if (NL.pacer === undefined) NL.pacer = root.GSGpuPacer ? new root.GSGpuPacer(gl) : null;
+    if (NL.pacer && !NL.pacer.ready()) return;
     /* resolução de trabalho: até 960 px no lado maior (prévia) */
     const sc = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
     const w = Math.round(v.videoWidth * sc), h = Math.round(v.videoHeight * sc);
@@ -340,6 +351,16 @@
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);      /* textura na orientação do GL (como os framebuffers) */
     try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, v); } catch (e) { stopLive(); return; }
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    /* DESEMPENHO: luz e ruído medidos 4×/s numa miniatura feita na GPU
+       (antes: 2 cópias extras do quadro da câmera para a CPU a cada medição) */
+    const now = performance.now();
+    if (NL.reader === undefined) NL.reader = root.GSFrameReader ? new GSFrameReader() : null;
+    if (NL.reader) {
+      /* leitura assíncrona: pede a miniatura e processa quando ficar pronta (sem esperar a GPU) */
+      const f = NL.reader.poll();
+      if (f) nightStats(f.data);
+      else if (!NL.reader.busy && now - NL.lastMeasure > 250) { NL.lastMeasure = now; NL.reader.request(v, 0, 0, v.videoWidth, v.videoHeight, 48, 27); }
+    } else if (now - NL.lastMeasure > 250) { NL.lastMeasure = now; measureGPU(w, h); }
     const src = NL.ping, dst = 1 - NL.ping;
     gl.bindFramebuffer(gl.FRAMEBUFFER, NL.fb[dst]); gl.viewport(0, 0, w, h);
     gl.useProgram(NL.pt.p);
@@ -358,6 +379,7 @@
     gl.uniform1f(NL.pd.loc.gain, NL.gain);
     gl.uniform1f(NL.pd.loc.sig, NL.sigma);
     nlDraw(NL.pd);
+    if (NL.pacer) NL.pacer.submitted();
   }
 
   function nlLoop() {
@@ -374,20 +396,32 @@
     NL.vfc = NL.video.requestVideoFrameCallback(nlOnFrame);
   }
 
-  /* mede ganho da cena e o ruído (diferença entre quadros) na CPU, 4× por segundo */
-  let nlProbe = null;
+  /* mede ganho da cena e o ruído (diferença entre miniaturas de quadros seguidos) */
   const prevSmall = new Uint8Array(48 * 27);
-  function nlMeasure() {
-    if (!NL.on) return;
-    NL.gain = liveGain(NL.video, 5);
-    try {
-      px.drawImage(NL.video, 0, 0, 48, 27);
-      const d = px.getImageData(0, 0, 48, 27).data, hd = new Uint32Array(64);
-      for (let i = 0, j = 0; j < prevSmall.length; i += 4, j++) { const g = d[i + 1]; hd[Math.min(63, Math.abs(g - prevSmall[j]))]++; prevSmall[j] = g; }
-      /* mediana da diferença entre quadros reduzidos (≈ ruído; o vídeo reduzido já é suavizado) */
-      let acc = 0, med = 0; for (let v = 0; v < 64; v++) { acc += hd[v]; if (acc >= prevSmall.length / 2) { med = v; break; } }
-      NL.sigma += (Math.min(10, Math.max(2, 2 + med * 1.5)) - NL.sigma) * 0.3;
-    } catch (e) { /* vídeo ainda sem quadro */ }
+  function measureGPU(w, h) {
+    const gl = NL.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, NL.fbS); gl.viewport(0, 0, 48, 27);
+    gl.useProgram(NL.pS.p);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, NL.cur);
+    gl.uniform1i(NL.pS.loc.t, 0); gl.uniform2f(NL.pS.loc.px, 1 / w * (w / 48) * 0.5, 1 / h * (h / 27) * 0.5);
+    nlDraw(NL.pS);
+    gl.readPixels(0, 0, 48, 27, gl.RGBA, gl.UNSIGNED_BYTE, NL.smallPx);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    nightStats(NL.smallPx);
+  }
+  function nightStats(d) {
+    const hd = new Uint32Array(64);
+    let s = 0;
+    for (let i = 0, j = 0; j < prevSmall.length; i += 4, j++) {
+      s += (d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8;
+      const g = d[i + 1]; hd[Math.min(63, Math.abs(g - prevSmall[j]))]++; prevSmall[j] = g;
+    }
+    const mean = s / prevSmall.length;
+    const target = Math.min(5, Math.max(1, 102 / Math.max(mean, 4)));
+    smoothGain += (target - smoothGain) * 0.35; NL.gain = smoothGain;
+    /* mediana da diferença entre quadros reduzidos (≈ ruído) */
+    let acc = 0, med = 0; for (let v = 0; v < 64; v++) { acc += hd[v]; if (acc >= prevSmall.length / 2) { med = v; break; } }
+    if (NL.frames > 1) NL.sigma += (Math.min(10, Math.max(2, 2 + med * 1.5)) - NL.sigma) * 0.3;
   }
 
   function startLive(canvas, video) {
@@ -397,9 +431,8 @@
     }
     if (!NL.ok) return false;
     NL.video = video; NL.on = true; NL.frames = 0; NL.lastT = -1;
-    smoothGain = 1; NL.gain = liveGain(video, 5);
+    smoothGain = 1; NL.gain = 1; NL.lastMeasure = 0;
     canvas.classList.remove('hidden');
-    clearInterval(nlProbe); nlProbe = setInterval(nlMeasure, 250);
     if (video.requestVideoFrameCallback) NL.vfc = video.requestVideoFrameCallback(nlOnFrame);
     else if (!NL.raf) NL.raf = requestAnimationFrame(nlLoop);
     return true;
@@ -417,7 +450,6 @@
   }
   function stopLive() {
     NL.on = false;
-    clearInterval(nlProbe); nlProbe = null;
     if (NL.raf) cancelAnimationFrame(NL.raf); NL.raf = 0;
     if (NL.vfc && NL.video && NL.video.cancelVideoFrameCallback) NL.video.cancelVideoFrameCallback(NL.vfc); NL.vfc = 0;
     if (NL.canvas) NL.canvas.classList.add('hidden');

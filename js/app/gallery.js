@@ -57,7 +57,7 @@ function renderGallery() {
     const isVideo = p.type==='video';
     const media=document.createElement(isVideo?'video':'img');
     if (isVideo) { media.muted=true; media.playsInline=true; media.preload='metadata'; media.src=(p.dataUrl||'')+'#t=0.1'; }
-    else { media.loading='lazy'; media.src=p.dataUrl||''; }
+    else { media.loading='lazy'; media.decoding='async'; media.src=p.dataUrl||''; }
     media.setAttribute('aria-label', (isVideo?'vídeo ':'foto ')+(idx+1));
 
     const ov=document.createElement('div');

@@ -16,7 +16,7 @@
    Nenhuma imagem sai do dispositivo. */
 (function (root) {
   'use strict';
-  const VER = '20261022d';
+  const VER = '20261023a';
   const BASE = (function () {
     const s = document.currentScript && document.currentScript.src;
     return s ? new URL('.', s).href : 'js/portrait/';
@@ -63,7 +63,11 @@
       const c = this.canvas; c.width = W; c.height = H;
       const x = c.getContext('2d', { willReadFrequently: true });
       x.drawImage(source, 0, 0, W, H);
-      const rgba = x.getImageData(0, 0, W, H).data;
+      return this.runRGBA(x.getImageData(0, 0, W, H).data, model, W, H);
+    },
+    /* pixels RGBA (W×H, de cima para baixo) já no tamanho do modelo */
+    async runRGBA(rgba, model, W, H) {
+      await this.init();
       if (this.worker) {
         const id = ++this.seq;
         return new Promise((resolve, reject) => {
@@ -117,11 +121,16 @@
     ' gl_FragColor=vec4(o,1.);}'
   ].join('\n');
 
+  /* cópia reduzida da imagem (para alimentar a IA sem copiar o quadro inteiro para a CPU) */
+  const FS_COPY = 'precision mediump float;varying vec2 uv;uniform sampler2D img;uniform vec2 px;void main(){gl_FragColor=.25*(texture2D(img,uv+px*vec2(-.25,-.25))+texture2D(img,uv+px*vec2(.25,-.25))+texture2D(img,uv+px*vec2(-.25,.25))+texture2D(img,uv+px*vec2(.25,.25)));}';
+
   class Compositor {
     constructor(canvas) {
-      const gl = canvas.getContext('webgl', { premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true });
+      const opts = { premultipliedAlpha: false, antialias: false, preserveDrawingBuffer: true };
+      const gl = canvas.getContext('webgl2', opts) || canvas.getContext('webgl', opts);
       if (!gl) throw new Error('WebGL indisponível');
       this.gl = gl; this.canvas = canvas;
+      this.pacer = root.GSGpuPacer ? new root.GSGpuPacer(gl) : null;
       const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
       const prog = (fs, names) => {
         const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(p);
@@ -131,12 +140,38 @@
       this.pDown = prog(FS_DOWN, ['img', 'msk', 'px']);
       this.pBlur = prog(FS_BLUR, ['src', 'dir']);
       this.pComp = prog(FS_COMP, ['img', 'msk', 'blr', 'mpx', 'on', 'hl']);
+      this.pCopy = prog(FS_COPY, ['img', 'px']);
       this.buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
       gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
       const tex = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
       this.tImg = tex(); this.tMsk = tex();
       this.tA = tex(); this.tB = tex(); this.fA = gl.createFramebuffer(); this.fB = gl.createFramebuffer();
       this.qw = 0; this.qh = 0; this.mask8 = null;
+    }
+    /* DESEMPENHO: reduz na GPU a imagem já enviada em draw() e lê só W×H pixels
+       (antes o quadro inteiro da câmera era copiado para a CPU a cada inferência) */
+    readSmall(W, H) {
+      const gl = this.gl;
+      if (!this.tS || this.sw !== W || this.sh !== H) {
+        if (!this.tS) { this.tS = gl.createTexture(); this.fS = gl.createFramebuffer(); }
+        gl.bindTexture(gl.TEXTURE_2D, this.tS);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, this.fS); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.tS, 0);
+        this.sw = W; this.sh = H; this.rowBuf = new Uint8Array(W * H * 4);
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.fS); gl.viewport(0, 0, W, H);
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.tImg);
+      const pr = this.pCopy;
+      gl.useProgram(pr.p); gl.uniform1i(pr.loc.img, 0); gl.uniform2f(pr.loc.px, 1 / W, 1 / H);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf); gl.enableVertexAttribArray(pr.ap); gl.vertexAttribPointer(pr.ap, 2, gl.FLOAT, false, 0, 0);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, this.rowBuf);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      /* o GL lê de baixo para cima: inverte as linhas */
+      const out = new Uint8ClampedArray(W * H * 4), row = W * 4, src = this.rowBuf;
+      for (let y = 0; y < H; y++) out.set(src.subarray((H - 1 - y) * row, (H - y) * row), y * row);
+      return out;
     }
     setMask(mask, w, h) {
       const gl = this.gl;
@@ -149,7 +184,10 @@
       gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
       this.mw = w; this.mh = h;
     }
-    draw(source, w, h, amount, enabled) {
+    /* force: foto (sempre desenha). Ao vivo, pula o quadro se a GPU ainda não
+       terminou o anterior (controle de fluxo) — retorna false nesse caso */
+    draw(source, w, h, amount, enabled, force) {
+      if (!force && this.pacer && !this.pacer.ready()) return false;
       const gl = this.gl, c = this.canvas;
       if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
       const qw = Math.max(8, Math.round(w / 4)), qh = Math.max(8, Math.round(h / 4));
@@ -189,11 +227,27 @@
       gl.uniform1f(this.pComp.loc.on, enabled ? 1 : 0);
       gl.uniform1f(this.pComp.loc.hl, 0.5 * amount);
       quad(this.pComp);
+      if (this.pacer) this.pacer.submitted();
+      return true;
     }
   }
 
   /* ═════════════ PRÉVIA AO VIVO ═════════════ */
   const L = { on: false, comp: null, canvas: null, video: null, amount: 0.6, mask: null, mw: 0, mh: 0, person: 0, vfc: 0, raf: 0, onStatus: null, err: null, inferences: 0 };
+
+  function onMask(r) {
+    Seg.busy = false;
+    if (!L.on) return;
+    /* suavização temporal da máscara (evita tremulação nas bordas) */
+    if (L.mask && L.mask.length === r.mask.length) for (let i = 0; i < r.mask.length; i++) L.mask[i] = L.mask[i] * 0.35 + r.mask[i] * 0.65;
+    else L.mask = r.mask;
+    L.mw = r.w; L.mh = r.h; L.inferences++;
+    L.comp.setMask(L.mask, r.w, r.h);
+    const pf = personFraction(L.mask), had = L.person > 0.01;
+    L.person = pf;
+    if (L.onStatus && (had !== pf > 0.01 || L.inferences === 1)) L.onStatus({ person: pf > 0.01, ms: r.ms });
+  }
+  function onMaskErr(e) { Seg.busy = false; L.err = e; if (L.onStatus) L.onStatus({ error: e.message }); }
 
   function liveFrame() {
     if (!L.on) return;
@@ -202,20 +256,18 @@
       const sc = Math.min(1, 960 / Math.max(v.videoWidth, v.videoHeight));
       const w = Math.round(v.videoWidth * sc), h = Math.round(v.videoHeight * sc);
       try { L.comp.draw(v, w, h, L.amount, !!L.mask && L.person > 0.01); } catch (e) { console.warn('Retrato:', e); }
+      /* DESEMPENHO: a imagem para a IA (256×144/256) é pedida à GPU sem bloquear
+         a interface e usada quando ficar pronta (1–2 quadros depois) */
       if (!Seg.busy) {
-        Seg.busy = true;
-        Seg.run(v, v.videoWidth, v.videoHeight).then(r => {
-          Seg.busy = false;
-          if (!L.on) return;
-          /* suavização temporal da máscara (evita tremulação nas bordas) */
-          if (L.mask && L.mask.length === r.mask.length) for (let i = 0; i < r.mask.length; i++) L.mask[i] = L.mask[i] * 0.35 + r.mask[i] * 0.65;
-          else L.mask = r.mask;
-          L.mw = r.w; L.mh = r.h; L.inferences++;
-          L.comp.setMask(L.mask, r.w, r.h);
-          const pf = personFraction(L.mask), had = L.person > 0.01;
-          L.person = pf;
-          if (L.onStatus && (had !== pf > 0.01 || L.inferences === 1)) L.onStatus({ person: pf > 0.01, ms: r.ms });
-        }).catch(e => { Seg.busy = false; L.err = e; if (L.onStatus) L.onStatus({ error: e.message }); });
+        if (!L.reader) L.reader = root.GSFrameReader ? new GSFrameReader() : null;
+        if (L.reader) {
+          const f = L.reader.poll();
+          if (f) { Seg.busy = true; Seg.runRGBA(f.data, L.pendModel, f.w, f.h).then(onMask, onMaskErr); }
+          else if (!L.reader.busy) {
+            L.pendModel = Seg.modelFor(v.videoWidth, v.videoHeight);
+            L.reader.request(v, 0, 0, v.videoWidth, v.videoHeight, 256, L.pendModel === 'landscape' ? 144 : 256);
+          }
+        } else { Seg.busy = true; Seg.run(v, v.videoWidth, v.videoHeight).then(onMask, onMaskErr); }
       }
     }
     if (v.requestVideoFrameCallback) L.vfc = v.requestVideoFrameCallback(liveFrame);
@@ -259,7 +311,7 @@
     const w = Math.round(W * sc), h = Math.round(H * sc);
     stillComp.setMask(r.mask, r.w, r.h);
     /* o desfoque é proporcional ao tamanho: mesma aparência da prévia */
-    stillComp.draw(srcCanvas, w, h, (amount == null ? L.amount : amount), true);
+    stillComp.draw(srcCanvas, w, h, (amount == null ? L.amount : amount), true, true);
     const ctx = srcCanvas.getContext('2d');
     ctx.drawImage(stillCanvas, 0, 0, W, H);
     return { applied: true, person: pf, ms: r.ms, model: Seg.modelFor(W, H) };

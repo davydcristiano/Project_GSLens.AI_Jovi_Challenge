@@ -136,7 +136,8 @@
   const P = { canvas: null, gl: null, prog: null, tex: null, lutTex: null, raf: 0, id: null, video: null, ok: null, loc: {} };
 
   function initGL(canvas) {
-    const gl = canvas.getContext('webgl', { premultipliedAlpha: false, preserveDrawingBuffer: false }) || canvas.getContext('experimental-webgl');
+    const o = { premultipliedAlpha: false, preserveDrawingBuffer: true };   /* mantém o último quadro (desenho só em quadros novos da câmera) */
+    const gl = canvas.getContext('webgl2', o) || canvas.getContext('webgl', o) || canvas.getContext('experimental-webgl', o);
     if (!gl) return false;
     const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
     const prog = gl.createProgram();
@@ -152,6 +153,7 @@
     for (const n of ['v', 'lut', 'm', 'o', 'vig', 'grain', 'res', 'gs']) P.loc[n] = gl.getUniformLocation(prog, n);
     gl.uniform1i(P.loc.v, 0); gl.uniform1i(P.loc.lut, 1);
     P.gl = gl; P.prog = prog;
+    P.pacer = root.GSGpuPacer ? new root.GSGpuPacer(gl) : null;
     return true;
   }
 
@@ -169,13 +171,23 @@
     gl.activeTexture(gl.TEXTURE0);
   }
 
+  /* DESEMPENHO: processa só quando a câmera entrega um quadro novo
+     (requestVideoFrameCallback) — antes reenviava o mesmo quadro à GPU a cada
+     atualização da tela (60×/s para uma câmera de 30 quadros/s). */
+  function clockOf(v) { const c = v.tagName === 'VIDEO' ? v : document.getElementById('video'); return c && c.requestVideoFrameCallback ? c : null; }
+  function schedule() {
+    const clk = P.video && clockOf(P.video);
+    if (clk) { P.clk = clk; P.raf = -1; P.vfc = clk.requestVideoFrameCallback(frame); }
+    else P.raf = requestAnimationFrame(frame);
+  }
   function frame() {
-    P.raf = 0;
+    P.raf = 0; P.vfc = 0;
     if (!P.id || !P.video) return;
     const v = P.video, gl = P.gl, c = P.canvas;
     /* fonte: o <video> ou a camada processada ao vivo (canvas do Noite/Retrato) */
     const isVid = v.tagName === 'VIDEO', vw = isVid ? v.videoWidth : v.width, vh = isVid ? v.videoHeight : v.height;
-    if (vw && (!isVid || v.readyState >= 2)) {
+    /* controle de fluxo: só desenha se a GPU já terminou o quadro anterior */
+    if (vw && (!isVid || v.readyState >= 2) && (!P.pacer || P.pacer.ready())) {
       const sc = Math.min(1, 1280 / Math.max(vw, vh));
       const w = Math.round(vw * sc), h = Math.round(vh * sc);
       if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
@@ -185,8 +197,9 @@
       gl.bindTexture(gl.TEXTURE_2D, P.tex);
       try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, v); } catch (e) { stopPreview(); return; }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      if (P.pacer) P.pacer.submitted();
     }
-    P.raf = requestAnimationFrame(frame);
+    schedule();
   }
 
   /* Ativa a prévia do filtro sobre o vídeo. Retorna false se não houver WebGL. */
@@ -201,13 +214,17 @@
     P.video = video; P.id = id;
     setUniforms(def);
     canvas.classList.remove('hidden');
-    if (!P.raf) P.raf = requestAnimationFrame(frame);
+    /* sempre reagenda (a câmera pode ter sido trocada e o callback antigo nunca disparar) */
+    if (P.raf > 0) cancelAnimationFrame(P.raf);
+    if (P.vfc && P.clk && P.clk.cancelVideoFrameCallback) P.clk.cancelVideoFrameCallback(P.vfc);
+    schedule();
     return true;
   }
   function stopPreview() {
     P.id = null;
-    if (P.raf) cancelAnimationFrame(P.raf);
-    P.raf = 0;
+    if (P.raf > 0) cancelAnimationFrame(P.raf);
+    if (P.vfc && P.clk && P.clk.cancelVideoFrameCallback) P.clk.cancelVideoFrameCallback(P.vfc);
+    P.raf = 0; P.vfc = 0;
     if (P.canvas) P.canvas.classList.add('hidden');
   }
 
@@ -222,5 +239,12 @@
     matte: 'contrast(.82) brightness(1.08) saturate(.85)', neonnoir: 'grayscale(1) sepia(1) hue-rotate(220deg) saturate(2) contrast(1.3)'
   };
 
-  root.GSFilters = { DEFS, has: id => BY_ID.has(id), get: id => BY_ID.get(id), apply, startPreview, stopPreview, cssFallback: id => CSS_FALLBACK[id] || 'none' };
+  /* prepara o WebGL dos filtros num momento ocioso (o 1º toque num filtro fica instantâneo) */
+  function prewarm(canvas) {
+    if (P.ok !== null) return;
+    P.canvas = canvas;
+    try { P.ok = initGL(canvas); } catch (e) { P.ok = false; }
+  }
+
+  root.GSFilters = { prewarm, DEFS, has: id => BY_ID.has(id), get: id => BY_ID.get(id), apply, startPreview, stopPreview, cssFallback: id => CSS_FALLBACK[id] || 'none' };
 })(window);

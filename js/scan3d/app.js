@@ -20,6 +20,7 @@
   const MAX_KF = 36;
   const AZ_BINS = 24;
   const MIN_KF = 8;
+  const BAND_MAX = 14;           /* vistas por faixa de altura (baixa/média/de cima) */
 
   const S = {
     active: false,
@@ -134,16 +135,48 @@
     S.loopTimer = null;
     if (!S.active || S.state === 'processing') return;
     const t0 = performance.now();
-    try { trackOnce(); } catch (e) { console.error('Rastreamento AR:', e); }
+    let r;
+    try { r = trackOnce(); } catch (e) { console.error('Rastreamento AR:', e); }
+    /* quadro pedido à GPU e ainda não pronto: verifica de novo logo em seguida */
+    if (r === 'wait') { S.loopTimer = setTimeout(tick, 10); return; }
     const dt = performance.now() - t0;
-    /* ~12 fps no máximo; se o aparelho for lento, dá folga à UI */
-    S.loopTimer = setTimeout(() => requestAnimationFrame(tick), Math.max(15, 80 - dt));
+    /* ~12 fps escaneando; ~6 fps parado (só a sobreposição AR). Se o aparelho
+       for lento, a pausa cresce junto com o tempo gasto (a UI nunca fica sem folga) */
+    const period = S.state === 'scanning' ? 80 : 160;
+    S.loopTimer = setTimeout(() => requestAnimationFrame(tick), Math.max(15 + dt * 0.5, period - dt));
+  }
+
+  /* DESEMPENHO: quadro ao vivo lido da GPU de forma assíncrona (a interface
+     não espera a GPU). Retorna o quadro pronto, null (pedido em andamento) ou
+     undefined (câmera sem imagem). */
+  function asyncFrame(video, maxDim) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if (!vw || !vh) return undefined;
+    if (S.liveReader === undefined) S.liveReader = root.GSFrameReader ? new root.GSFrameReader() : null;
+    if (!S.liveReader) return grabFrame(video, maxDim, S.liveCanvas, S.liveCtx);
+    /* lê UM quadro na resolução dos quadros‑chave (960) e reduz para o
+       rastreamento (640) na CPU: a vista capturada é exatamente o quadro
+       rastreado (mesmo instante — essencial no modo sem prancha) */
+    const sc = Math.min(1, maxDim / Math.max(vw, vh)), w = Math.round(vw * sc), h = Math.round(vh * sc);
+    const sk = Math.min(1, KF_MAX / Math.max(vw, vh)), W = Math.round(vw * sk), H = Math.round(vh * sk);
+    const f = S.liveReader.poll();
+    if (!S.liveReader.busy) S.liveReader.request(video, 0, 0, vw, vh, W, H);     /* já pede o próximo */
+    if (!f || f.w !== W || f.h !== H) return null;
+    const big = new ImageData(f.data, W, H);
+    if (!S.bigCanvas) { S.bigCanvas = document.createElement('canvas'); S.bigCtx = S.bigCanvas.getContext('2d', { willReadFrequently: true }); }
+    if (S.bigCanvas.width !== W || S.bigCanvas.height !== H) { S.bigCanvas.width = W; S.bigCanvas.height = H; }
+    S.bigCtx.putImageData(big, 0, 0);
+    if (S.liveCanvas.width !== w || S.liveCanvas.height !== h) { S.liveCanvas.width = w; S.liveCanvas.height = h; }
+    S.liveCtx.drawImage(S.bigCanvas, 0, 0, w, h);                                /* canvas de CPU → sem esperar a GPU */
+    return { img: S.liveCtx.getImageData(0, 0, w, h), scale: sc, w, h, t: f.t, big: { img: big, scale: sk, w: W, h: H } };
   }
 
   function trackOnce() {
     const video = $('video');
     ensureCanvases();
-    const fr = grabFrame(video, LIVE_MAX, S.liveCanvas, S.liveCtx);
+    finishPendingKF();
+    const fr = asyncFrame(video, LIVE_MAX);
+    if (fr === null) return 'wait';
     if (!fr) { drawOverlay(null); setStatus('Aguardando a imagem da câmera…'); return; }
     if (isSurf()) { trackSurface(video, fr); return; }
     const det = S.tracker.detect(fr.img, { minMarkers: 4 });
@@ -172,8 +205,10 @@
     const horiz = Math.hypot(C[0], C[1]);
     const el = Math.atan2(C[2], horiz) * 180 / Math.PI;
     const az = (Math.atan2(C[1], C[0]) * 180 / Math.PI + 360) % 360;
-    const now = performance.now();
-    const speed = S.lastC && S.lastT ? Math.hypot(C[0] - S.lastC[0], C[1] - S.lastC[1], C[2] - S.lastC[2]) / Math.max(0.03, (now - S.lastT) / 1000) : 0;
+    /* velocidade pelo instante em que cada quadro foi tirado (com a leitura
+       assíncrona, o processamento não acontece em intervalos regulares) */
+    const now = fr.t || performance.now();
+    const speed = S.lastC && S.lastT && now > S.lastT ? Math.hypot(C[0] - S.lastC[0], C[1] - S.lastC[1], C[2] - S.lastC[2]) / Math.max(0.03, (now - S.lastT) / 1000) : 0;
     S.lastC = C; S.lastT = now; S.lastPose = pose;
     /* volume inteiro visível? */
     const V = volume();
@@ -190,8 +225,8 @@
     else if (speed > 180) hint = 'Mova mais devagar para evitar imagem tremida.';
     S.hint = hint;
 
-    let captured = false;
-    if (S.state === 'scanning' && !hint) captured = maybeCapture(video, { az, el, C, H: info.H });
+    if (S.state === 'scanning' && !hint) maybeCapture(video, { az, el, C, H: info.H, big: fr.big });
+    const captured = S.justCaptured; S.justCaptured = false;
     drawOverlay({ fr, det, pose, K, az, el, ok: !hint, points: info.points });
 
     if (S.state === 'scanning') {
@@ -306,9 +341,37 @@
       if (a < minAng) minAng = a;
     }
     if (minAng < 11) return false;
-    /* quadro-chave em resolução maior, com nova detecção (mais precisa) */
-    const fr = grabFrame(video, KF_MAX, S.kfCanvas, S.kfCtx);
-    if (!fr) return false;
+    /* cota por faixa de altura: o limite de vistas não pode se esgotar nas
+       voltas baixas/médias antes das vistas de cima (sem elas o topo do objeto
+       não é esculpido) */
+    const band = info.el < 35 ? 0 : info.el < 60 ? 1 : 2;
+    if (S.keyframes.filter(k => (k.el < 35 ? 0 : k.el < 60 ? 1 : 2) === band).length >= BAND_MAX) {
+      S.hint = ''; S.bandFull = band; return false;
+    }
+    /* quadro-chave em resolução maior, com nova detecção (mais precisa).
+       DESEMPENHO: pedido à GPU sem bloquear; concluído em finishPendingKF() */
+    if (info.big) return finishCapture(info.big, info, dir);               /* mesmo quadro do rastreamento */
+    if (S.kfPending) return false;
+    if (S.kfReader === undefined) S.kfReader = root.GSFrameReader ? new root.GSFrameReader() : null;
+    if (!S.kfReader) { const fr = grabFrame(video, KF_MAX, S.kfCanvas, S.kfCtx); return fr ? finishCapture(fr, info, dir) : false; }
+    const vw = video.videoWidth, vh = video.videoHeight, sc = Math.min(1, KF_MAX / Math.max(vw, vh));
+    if (!S.kfReader.request(video, 0, 0, vw, vh, Math.round(vw * sc), Math.round(vh * sc))) return false;
+    S.kfPending = { info, dir, sc };
+    return false;
+  }
+
+  function finishPendingKF() {
+    if (!S.kfReader) return;
+    /* leitura de um pedido descartado (cancelar/reiniciar no meio): só esvazia */
+    if (!S.kfPending) { if (S.kfReader.busy) S.kfReader.poll(); return; }
+    const f = S.kfReader.poll();
+    if (!f) { if (!S.kfReader.busy) S.kfPending = null; return; }
+    const p = S.kfPending; S.kfPending = null;
+    if (S.state !== 'scanning' || S.keyframes.length >= MAX_KF) return;
+    finishCapture({ img: new ImageData(f.data, f.w, f.h), scale: p.sc, w: f.w, h: f.h }, p.info, p.dir);
+  }
+
+  function finishCapture(fr, info, dir) {
     if (isSurf()) {
       const su = S.surf, k = fr.w / su.liveW, Sm = [k, 0, 0, 0, k, 0, 0, 0, 1], Si = [1 / k, 0, 0, 0, 1 / k, 0, 0, 0, 1];
       const rk = su.kf.refineImage(fr.img, M.mul3(Sm, M.mul3(info.H, Si)));
@@ -319,6 +382,7 @@
       S.sharpRef.push(sharp);
       if (S.sharpRef.length > 15) S.sharpRef.shift();
       S.keyframes.push({ rgba: fr.img.data, w: fr.w, h: fr.h, H: rk.H, matches: rk.matches, az: info.az, el: info.el, dir });
+      S.justCaptured = true;
       flashSoft();
       liveCalibrate();
       refreshUI();
@@ -331,6 +395,7 @@
     S.sharpRef.push(sharp);
     if (S.sharpRef.length > 15) S.sharpRef.shift();
     S.keyframes.push({ rgba: fr.img.data, w: fr.w, h: fr.h, det, az: info.az, el: info.el, dir });
+    S.justCaptured = true;
     flashSoft();
     refreshUI();
     return true;
@@ -457,6 +522,7 @@
   }
 
   function clearKeyframes() {
+    S.kfPending = null;
     S.keyframes = [];          /* libera os buffers de imagem para o GC */
     S.sharpRef = [];
   }

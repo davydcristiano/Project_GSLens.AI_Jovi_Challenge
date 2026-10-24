@@ -30,7 +30,7 @@ module.exports = {
     }, page);
 
     await t.step('captura automática', async () => {
-      await page.waitForFunction(() => document.getElementById('scanProgressBar').style.width === '100%' || Scan3D._debug.keyframes.length >= 30, null, { timeout: 600000, polling: 2000 });
+      await page.waitForFunction(() => document.getElementById('scanProgressBar').style.width === '100%' || Scan3D._debug.keyframes.length >= 36, null, { timeout: 600000, polling: 2000 });
       const n = await page.evaluate(() => Scan3D._debug.keyframes.length);
       t.check('vistas capturadas automaticamente', n >= 12, n);
     }, page);

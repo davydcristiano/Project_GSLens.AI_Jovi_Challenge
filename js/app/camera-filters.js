@@ -167,22 +167,19 @@ function filterName(fx) {
   return el ? el.textContent : fx;
 }
 
-/* Miniaturas dos filtros: uma cena de exemplo processada pelo próprio
-   filtro (antes eram quadrados cinza com CSS, quase iguais entre si). */
-function sampleThumbCanvas() {
-  /* Capa só com cores: espectro de matizes (horizontal) do claro ao escuro
-     (vertical), como um seletor de cores. Passando pelo filtro, a capa mostra
-     exatamente o que ele faz com cada cor e com claros/escuros. */
-  const N = 96, c = document.createElement('canvas'); c.width = c.height = N;
-  const x = c.getContext('2d', { willReadFrequently: true });
-  const hue = x.createLinearGradient(0, 0, N, 0);
-  ['#ff3b30', '#ff9500', '#ffcc00', '#34c759', '#00c7be', '#007aff', '#af52de', '#ff2d55'].forEach((col, i, arr) => hue.addColorStop(i / (arr.length - 1), col));
-  x.fillStyle = hue; x.fillRect(0, 0, N, N);
-  const light = x.createLinearGradient(0, 0, 0, N);
-  light.addColorStop(0, 'rgba(255,255,255,.85)'); light.addColorStop(0.32, 'rgba(255,255,255,0)');
-  light.addColorStop(0.62, 'rgba(0,0,0,0)'); light.addColorStop(1, 'rgba(0,0,0,.85)');
-  x.fillStyle = light; x.fillRect(0, 0, N, N);
-  return c;
+/* Capas dos filtros: um degradê (claro → médio → escuro) de um cinza‑azulado
+   neutro, passado pelo PRÓPRIO filtro — a capa mostra o tom que o filtro dá.
+   DESEMPENHO: calculado direto nos números (ImageData de 3 pixels), sem
+   desenhar nem ler canvas; antes cada capa custava uma leitura de canvas
+   na abertura do app. */
+const SWATCH_BASE = [[164, 170, 186], [98, 104, 122], [40, 44, 54]];
+function filterSwatch(fx) {
+  const id = new ImageData(3, 1);
+  SWATCH_BASE.forEach((c, i) => { id.data[i * 4] = c[0]; id.data[i * 4 + 1] = c[1]; id.data[i * 4 + 2] = c[2]; id.data[i * 4 + 3] = 255; });
+  const fake = { getImageData: () => id, putImageData: () => {} };
+  try { if (fx !== 'none') applyFilter(fake, 3, 1, fx, 1); } catch (e) { /* mantém o neutro */ }
+  const c = i => `rgb(${id.data[i * 4]},${id.data[i * 4 + 1]},${id.data[i * 4 + 2]})`;
+  return `linear-gradient(135deg, ${c(0)} 0%, ${c(1)} 52%, ${c(2)} 100%)`;
 }
 
 function buildFilterUI() {
@@ -213,14 +210,10 @@ function buildFilterUI() {
       }
     }
   }
-  /* miniaturas reais para todos os filtros (originais + novos) */
-  const base = sampleThumbCanvas();
+  /* capas: degradê com o tom de cada filtro */
   document.querySelectorAll('.fi').forEach(el => {
-    const fx = el.dataset.f, c = document.createElement('canvas'); c.width = c.height = 96;
-    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(base, 0, 0);
-    try { applyFilter(x, 96, 96, fx, 1); } catch (e) { /* mantém a cena original */ }
     const ft = el.querySelector('.ft');
-    ft.style.backgroundImage = `url(${c.toDataURL('image/png')})`;
+    ft.style.backgroundImage = filterSwatch(el.dataset.f);
     ft.classList.add('has-thumb');
   });
 }

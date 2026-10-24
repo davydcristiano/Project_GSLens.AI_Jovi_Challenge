@@ -819,9 +819,30 @@ body.theme-light .scan-viewer{ background:radial-gradient(circle at 50% 40%, #ff
 
 
 /* ═══════════════════════
-   FILTROS — grupos e miniaturas reais
+   FILTROS — capas (degradê do tom do filtro, moldura escura, brilho)
 ═══════════════════════ */
+.fi{ width:66px; gap:6px; }
+.fi span{ font-size:.66rem; color:#d6dae3; font-weight:500; }
+.fi .ft{
+  position:relative; overflow:hidden; width:54px; height:54px; border-radius:14px;
+  border:2px solid #0b0d12;
+  box-shadow:0 0 0 1px rgba(255,255,255,.07), 0 3px 8px rgba(0,0,0,.55);
+  transition:box-shadow .2s, border-color .2s, transform .15s;
+}
 .fi .ft.has-thumb{ background-size:cover; background-position:center; filter:none !important; }
+/* brilho de vidro no canto superior + sombra interna */
+.fi .ft::after{
+  content:''; position:absolute; inset:0; border-radius:12px; pointer-events:none;
+  background:radial-gradient(120% 90% at 18% 10%, rgba(255,255,255,.22), rgba(255,255,255,0) 55%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.18), inset 0 -8px 14px rgba(0,0,0,.28);
+}
+.fi:active .ft{ transform:scale(.95); }
+.fi.active .ft{
+  border-color:var(--accent);
+  box-shadow:0 0 0 1px rgba(0,229,255,.55), 0 0 12px 2px rgba(0,229,255,.55), 0 3px 8px rgba(0,0,0,.5);
+}
+.fi.active span{ color:var(--accent); font-weight:700; }
+@media (max-height:760px){ .fi{ width:58px; } .fi .ft{ width:46px; height:46px; border-radius:12px; } }
 .fi-group{
   flex-shrink:0; align-self:center; writing-mode:vertical-rl; transform:rotate(180deg);
   font-size:.58rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
@@ -950,3 +971,5 @@ body.sheet-open{ overflow:hidden; }
 .scale-fix-row select{ flex:0 0 auto; width:auto; }
 .scale-fix-row input{ flex:1; min-width:0; }
 .help-sub{ font-size:.85rem; font-weight:700; margin:10px 0 4px; }
+
+.filters-strip .section-label{ color:#f1f3f8; font-weight:700; font-size:.78rem; letter-spacing:.01em; text-transform:none; }

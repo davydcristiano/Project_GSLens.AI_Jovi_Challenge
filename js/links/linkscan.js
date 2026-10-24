@@ -174,7 +174,7 @@
     size: Math.max(1, Math.min(2, ((root.navigator && navigator.hardwareConcurrency) || 2) >= 6 ? 2 : 1)),
     canWorker() { return !this.failed && /^https?:$/.test(location.protocol) && 'Worker' in root; },
     spawn() {
-      const w = new Worker('js/links/ocr-worker.js?v=20261022d');
+      const w = new Worker('js/links/ocr-worker.js?v=20261023a');
       w.busy = 0;
       w.onmessage = e => { w.busy = Math.max(0, w.busy - 1); const p = this.pending.get(e.data.id); if (!p) return; this.pending.delete(e.data.id); e.data.error ? p.reject(new Error(e.data.error)) : p.resolve(e.data); };
       w.onerror = e => { console.warn('OCR worker:', e.message); this.failed = true; this.pending.forEach(p => p.reject(new Error('OCR indisponível'))); this.pending.clear(); this.workers = []; };
@@ -192,7 +192,7 @@
       if (this.warmed || !this.canWorker()) return; this.warmed = true;
       /* aquece com um texto de verdade (a 1ª leitura real fica ~2x mais rápida) */
       const c = document.createElement('canvas'); c.width = 420; c.height = 64;
-      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 420, 64);
+      const x = c.getContext('2d', { willReadFrequently: true }); x.fillStyle = '#fff'; x.fillRect(0, 0, 420, 64);   /* canvas de CPU: ler os pixels não espera a GPU */
       x.fillStyle = '#111'; x.font = '32px Arial, sans-serif'; x.fillText('www.exemplo.com.br', 12, 44);
       const d = x.getImageData(0, 0, 420, 64).data;
       const pgm = toPGM(grayFromRGBA(d, 420 * 64), 420, 64);
@@ -453,6 +453,20 @@
     let sx = 0, sy = 0, sw = vw, sh = vh;
     if (m) { sx = Math.max(0, -m.ox / m.s); sy = Math.max(0, -m.oy / m.s); sw = Math.min(vw - sx, m.W / m.s); sh = Math.min(vh - sy, m.H / m.s); }
     const vis = { x: sx, y: sy, w: sw, h: sh };   /* parte do vídeo que aparece na tela */
+    /* DESEMPENHO: UM retrato do quadro por ciclo, lido da GPU sem bloquear a
+       interface (antes o vídeo era copiado de forma síncrona várias vezes por
+       ciclo: QR, regiões de texto e cada recorte do OCR) */
+    let src = video;
+    if (root.GSFrameReader && Math.max(vw, vh) <= 1920) {
+      if (!L.reader) { L.reader = new GSFrameReader(); L.snap = document.createElement('canvas'); L.snapCtx = L.snap.getContext('2d', { willReadFrequently: true }); }
+      const f = await L.reader.grab(video, 0, 0, vw, vh, vw, vh);
+      if (!L.enabled || !shouldScan()) { clearOverlay(); schedule(300); return; }
+      if (f && f.w === vw && f.h === vh) {
+        if (L.snap.width !== vw || L.snap.height !== vh) { L.snap.width = vw; L.snap.height = vh; }
+        L.snapCtx.putImageData(new ImageData(f.data, vw, vh), 0, 0);
+        src = L.snap;
+      }
+    }
     /* alterna: imagem visível inteira (reduzida) e o centro em resolução
        nativa — QR pequeno/distante só é legível no recorte central */
     L.pass = (L.pass + 1) % 2;
@@ -463,7 +477,7 @@
     const sc = Math.min(1, (L.pass === 1 ? 900 : 800) / Math.max(sw, sh));
     const w = Math.round(sw * sc), h = Math.round(sh * sc);
     if (L.frameCanvas.width !== w || L.frameCanvas.height !== h) { L.frameCanvas.width = w; L.frameCanvas.height = h; }
-    L.frameCtx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
+    L.frameCtx.drawImage(src, sx, sy, sw, sh, 0, 0, w, h);
     const now = performance.now();
     let found = [];
     try { found = await readQR(L.frameCanvas, L.frameCtx, L.pass === 0 ? true : (L.ticks++ % 2 === 0)); }
@@ -485,18 +499,18 @@
       const tJob = performance.now();
       const job = (async () => {
         if (L.ocrTurn % 5 === 0) {
-          const png = await ocrPng(video, vis.x, vis.y, vis.w, vis.h, 1280);
+          const png = await ocrPng(src, vis.x, vis.y, vis.w, vis.h, 1280);
           const r = await OCR.recognize(png);
           return { text: r.text, links: extractLinks(r.text).map(url => ({ url, box: null, label: url, explicit: false, conf: null })) };
         }
         /* só o texto que aparece na tela (como a câmera do iPhone) */
         const mx = vis.w * 0.03, my = vis.h * 0.03;
         /* texto cortado pela borda da tela fica de fora (geraria domínio incompleto) */
-        const regs = findTextRegions(video, vw, vh, 24).filter(r => {
+        const regs = findTextRegions(src, vw, vh, 24).filter(r => {
           const cy = r.y + r.h / 2;
           return r.x >= vis.x + 2 && r.x + r.w <= vis.x + vis.w - 2 && cy > vis.y - my && cy < vis.y + vis.h + my;
         }).slice(0, 6);
-        return ocrRegions(video, vw, vh, regs);
+        return ocrRegions(src, vw, vh, regs);
       })();
       job.then(res => {
         if (DEBUG) console.info('[links] OCR', Math.round(performance.now() - tJob) + 'ms', L.ocrTurn % 5 === 0 ? '(quadro)' : '(regiões ' + (res.n || 0) + ')', JSON.stringify(res.text || ''), res.links.map(l => l.url));
@@ -801,8 +815,9 @@
     loadPref(); updateToggle();
     if (L.enabled) {
       schedule(300);
-      /* aquece o OCR logo após a tela inicial aparecer */
-      setTimeout(() => OCR.warm(), 400);
+      /* aquece o OCR quando o aparelho estiver ocioso (não disputa a abertura do app) */
+      const warm = () => OCR.warm();
+      if (root.requestIdleCallback) requestIdleCallback(warm, { timeout: 2500 }); else setTimeout(warm, 1200);
     }
   }
   function onVisibility() { if (!document.hidden && L.enabled && !L.timer) schedule(300); }
